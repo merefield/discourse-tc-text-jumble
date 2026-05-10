@@ -1,0 +1,13 @@
+{
+  "name": "discourse-text-jumble",
+  "component": true,
+  "authors": "Robert",
+  "about_url": "https://github.com/robert/discourse-text-jumble",
+  "license_url": "https://github.com/robert/discourse-text-jumble/blob/main/LICENSE",
+  "learn_more": "https://github.com/robert/discourse-text-jumble",
+  "theme_version": "0.1.0",
+  "minimum_discourse_version": null,
+  "maximum_discourse_version": null,
+  "assets": {},
+  "modifiers": {}
+}

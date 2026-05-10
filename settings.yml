@@ -1,0 +1,32 @@
+text_jumble_enabled:
+  default: true
+
+text_jumble_idle_seconds:
+  default: 30
+
+text_jumble_topic_source:
+  default: "latest"
+  type: enum
+  choices:
+    - latest
+    - top_weekly
+    - top_monthly
+
+text_jumble_min_paragraph_length:
+  default: 180
+
+text_jumble_cycle_seconds:
+  default: 45
+
+text_jumble_animation_mode:
+  default: "mixed"
+  type: enum
+  choices:
+    - mixed
+    - grid
+    - spiral
+    - sorting
+    - slots
+
+text_jumble_fallback_text:
+  default: "Discourse turns conversation into structure: paragraphs become lattices, letters find rails, sentences fold into circles, and the page drifts back toward readability before it changes shape again."

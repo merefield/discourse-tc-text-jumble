@@ -1,0 +1,96 @@
+.text-jumble-screen-saver-host {
+  display: contents;
+}
+
+.text-jumble-screen-saver {
+  --text-jumble-screen-saver-top: var(--header-offset, 0px);
+  --text-jumble-background-rgb: var(--secondary-rgb);
+  --text-jumble-filter-rgb: var(--primary-rgb);
+  --text-jumble-filter-opacity-start: 0.08;
+  --text-jumble-filter-opacity-end: 0.12;
+  position: fixed;
+  inset: var(--text-jumble-screen-saver-top) 0 0 0;
+  z-index: z("header") - 1;
+  width: 100vw;
+  height: calc(100dvh - var(--text-jumble-screen-saver-top));
+  overflow: hidden;
+  background:
+    radial-gradient(
+      circle at 32% 26%,
+      rgb(var(--tertiary-rgb), 0.06),
+      transparent 28rem
+    ),
+    radial-gradient(
+      circle at 72% 68%,
+      rgb(var(--quaternary-rgb), 0.05),
+      transparent 24rem
+    ),
+    linear-gradient(
+      135deg,
+      rgb(var(--text-jumble-background-rgb), 1),
+      rgb(var(--text-jumble-background-rgb), 0.98) 54%,
+      rgb(var(--text-jumble-background-rgb), 1)
+    );
+  backdrop-filter: blur(10px) saturate(0.8);
+  opacity: 0;
+  pointer-events: auto;
+  animation: text-jumble-screen-saver-fade-in 420ms ease-out forwards;
+}
+
+.text-jumble-screen-saver::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  background:
+    linear-gradient(
+      rgb(
+        var(--text-jumble-filter-rgb),
+        var(--text-jumble-filter-opacity-start)
+      ),
+      rgb(var(--text-jumble-filter-rgb), var(--text-jumble-filter-opacity-end))
+    ),
+    repeating-linear-gradient(
+      0deg,
+      rgb(var(--text-jumble-filter-rgb), 0.014) 0,
+      rgb(var(--text-jumble-filter-rgb), 0.014) 1px,
+      transparent 1px,
+      transparent 4px
+    );
+}
+
+.text-jumble-screen-saver__canvas {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  width: 100%;
+  height: 100%;
+}
+
+.text-jumble-screen-saver__source {
+  position: absolute;
+  right: 1rem;
+  bottom: 1rem;
+  z-index: 2;
+  max-width: min(34rem, calc(100vw - 2rem));
+  padding: 0.45rem 0.65rem;
+  color: rgb(var(--secondary-rgb), 0.72);
+  font-size: var(--font-down-1);
+  line-height: var(--line-height-medium);
+  text-align: right;
+  text-wrap: balance;
+  background: rgb(var(--primary-rgb), 0.2);
+  border: 1px solid rgb(var(--secondary-rgb), 0.16);
+  border-radius: 4px;
+  backdrop-filter: blur(8px);
+}
+
+@keyframes text-jumble-screen-saver-fade-in {
+  from {
+    opacity: 0;
+  }
+
+  to {
+    opacity: 1;
+  }
+}
