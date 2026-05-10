@@ -17,10 +17,24 @@ const ACTIVITY_EVENTS = [
   "scroll",
 ];
 
-const MODES = ["grid", "spiral", "sorting", "slots"];
-const CYCLE_MS = 22000;
+const MODES = [
+  "grid",
+  "spiral",
+  "sorting",
+  "slots",
+  "wave",
+  "orbit",
+  "columns",
+  "dominos",
+  "slot_machine",
+];
+const ANIMATION_MS = 18000;
+const SPECTRUM_PALETTE_LEVEL_COUNT = 8;
+const STRUCTURED_PALETTE_LEVEL_COUNT = 12;
 const MAX_GLYPHS = 1100;
 const TEXT_TRANSITION_MS = 1600;
+const TEXT_TYPE_TRANSITION_MS = 3200;
+const TEXT_TYPE_FADE_OUT_MS = 1000;
 
 function clamp(value, min, max) {
   return Math.min(Math.max(value, min), max);
@@ -78,6 +92,11 @@ function rgbString(rgb, alpha) {
   return `rgba(${rgb.join(", ")}, ${alpha})`;
 }
 
+function seededUnit(seed) {
+  const value = Math.sin(seed * 12.9898) * 43758.5453;
+  return value - Math.floor(value);
+}
+
 function stripHtml(html) {
   const document = new DOMParser().parseFromString(html || "", "text/html");
 
@@ -109,19 +128,24 @@ export default class TextJumbleScreenSaver extends Component {
   @tracked sourceTitle = "";
 
   animationFrame = null;
+  animationModeIndex = -1;
   canvas = null;
-  colorScope = "letters";
+  colorPaletteMode = "spectrum";
   context = null;
   glyphs = [];
   glyphSpriteCache = new Map();
   idleTimer = null;
+  lastQuoteText = null;
+  lastTopicId = null;
   outgoingGlyphs = [];
   paragraph = "";
   paragraphTimer = null;
   resizeObserver = null;
   root = null;
+  slotMachineSeed = 0;
   stage = null;
   startedAt = 0;
+  transitionMode = "crossfade";
   transitionStartedAt = null;
 
   @action
@@ -189,7 +213,10 @@ export default class TextJumbleScreenSaver extends Component {
   }
 
   async show() {
-    this.colorScope = Math.random() < 0.5 ? "letters" : "words";
+    this.glyphs = [];
+    this.outgoingGlyphs = [];
+    this.transitionMode = Math.random() < 0.5 ? "crossfade" : "type";
+    this.transitionStartedAt = null;
     this.isVisible = true;
     await this.loadParagraph();
     this.scheduleNextParagraph();
@@ -236,11 +263,10 @@ export default class TextJumbleScreenSaver extends Component {
       return;
     }
 
-    const seconds = Math.max(settings.text_jumble_cycle_seconds, 10);
     this.paragraphTimer = setTimeout(async () => {
       await this.loadParagraph();
       this.scheduleNextParagraph();
-    }, seconds * 1000);
+    }, this.msUntilNextParagraph());
   }
 
   async loadParagraph() {
@@ -260,7 +286,12 @@ export default class TextJumbleScreenSaver extends Component {
       const candidates = topics.filter(
         (topic) => !topic.pinned && !topic.closed
       );
-      const topic = candidates[Math.floor(Math.random() * candidates.length)];
+      const topicCandidates =
+        candidates.length > 1
+          ? candidates.filter((topic) => topic.id !== this.lastTopicId)
+          : candidates;
+      const topic =
+        topicCandidates[Math.floor(Math.random() * topicCandidates.length)];
 
       if (!topic) {
         throw new Error("No topics available");
@@ -278,6 +309,7 @@ export default class TextJumbleScreenSaver extends Component {
       }
 
       this.paragraph = paragraph;
+      this.lastTopicId = topic.id;
       this.sourceTitle = topicJson.title || topic.title || "";
     } catch {
       this.paragraph = fallbackText;
@@ -298,8 +330,14 @@ export default class TextJumbleScreenSaver extends Component {
       .map((quote) => quote?.trim())
       .filter(Boolean);
 
+    const quoteCandidates =
+      quotes.length > 1
+        ? quotes.filter((quote) => quote !== this.lastQuoteText)
+        : quotes;
     this.paragraph =
-      quotes[Math.floor(Math.random() * quotes.length)] || fallbackText;
+      quoteCandidates[Math.floor(Math.random() * quoteCandidates.length)] ||
+      fallbackText;
+    this.lastQuoteText = this.paragraph;
     this.sourceTitle = "";
   }
 
@@ -324,6 +362,11 @@ export default class TextJumbleScreenSaver extends Component {
     if (!this.context || !this.canvas || !this.paragraph) {
       return;
     }
+
+    if (transition || this.animationModeIndex < 0) {
+      this.animationModeIndex = (this.animationModeIndex + 1) % MODES.length;
+    }
+    this.slotMachineSeed = Math.random() * 10000;
 
     const ctx = this.context;
     const width = this.canvas.width;
@@ -360,6 +403,11 @@ export default class TextJumbleScreenSaver extends Component {
     const startY = height / 2 - totalHeight / 2;
     const glyphs = [];
     let globalWordIndex = 0;
+    const colorPaletteMode = Math.random() < 0.5 ? "spectrum" : "structured";
+    const colorPaletteOffset =
+      colorPaletteMode === "structured"
+        ? Math.floor(Math.random() * STRUCTURED_PALETTE_LEVEL_COUNT)
+        : 0;
 
     lines.forEach((textLine, lineIndex) => {
       let x = width / 2 - ctx.measureText(textLine).width / 2;
@@ -378,6 +426,12 @@ export default class TextJumbleScreenSaver extends Component {
           glyphs.push({
             char,
             columnIndex,
+            colorIndex: this.wordColorIndex(
+              lineWordIndex,
+              colorPaletteMode,
+              colorPaletteOffset
+            ),
+            colorPaletteMode,
             fontSize,
             index: glyphs.length,
             lineIndex,
@@ -401,6 +455,25 @@ export default class TextJumbleScreenSaver extends Component {
       globalWordIndex = lineWordIndex;
     });
 
+    let dominoIndex = 0;
+    const glyphsByLine = new Map();
+    glyphs.forEach((glyph) => {
+      const lineGlyphs = glyphsByLine.get(glyph.lineIndex) || [];
+      lineGlyphs.push(glyph);
+      glyphsByLine.set(glyph.lineIndex, lineGlyphs);
+    });
+    [...glyphsByLine.keys()]
+      .sort((a, b) => a - b)
+      .forEach((lineIndex) => {
+        const lineGlyphs = glyphsByLine
+          .get(lineIndex)
+          .sort((a, b) => (lineIndex % 2 === 0 ? a.x - b.x : b.x - a.x));
+
+        lineGlyphs.forEach((glyph) => {
+          glyph.dominoIndex = dominoIndex++;
+        });
+      });
+
     const sorted = [...glyphs].sort((a, b) => {
       const charCompare = a.char.localeCompare(b.char);
       return (
@@ -411,15 +484,45 @@ export default class TextJumbleScreenSaver extends Component {
     });
     sorted.forEach((glyph, rank) => (glyph.sortedRank = rank));
 
-    if (transition && this.glyphs.length) {
-      this.outgoingGlyphs = this.glyphs;
-      this.transitionStartedAt = performance.now();
+    if (transition) {
+      if (this.glyphs.length) {
+        this.outgoingGlyphs = this.glyphs;
+        this.transitionMode = Math.random() < 0.5 ? "crossfade" : "type";
+        this.transitionStartedAt = performance.now();
+      } else if (this.transitionMode === "type") {
+        this.outgoingGlyphs = [];
+        this.transitionStartedAt = performance.now();
+      } else {
+        this.outgoingGlyphs = [];
+        this.transitionStartedAt = null;
+      }
     } else {
       this.outgoingGlyphs = [];
+      this.transitionMode = "crossfade";
       this.transitionStartedAt = null;
     }
 
     this.glyphs = glyphs;
+    this.startedAt = performance.now();
+  }
+
+  wordColorIndex(wordIndex, paletteMode, paletteOffset = 0) {
+    if (paletteMode === "structured") {
+      const position =
+        (wordIndex + paletteOffset) % STRUCTURED_PALETTE_LEVEL_COUNT;
+
+      if (position === 5) {
+        return 1;
+      }
+
+      if (position === 11) {
+        return 2;
+      }
+
+      return 0;
+    }
+
+    return wordIndex % SPECTRUM_PALETTE_LEVEL_COUNT;
   }
 
   startAnimation() {
@@ -450,74 +553,123 @@ export default class TextJumbleScreenSaver extends Component {
     const width = this.canvas.width;
     const height = this.canvas.height;
     const elapsed = now - this.startedAt;
-    const cycle = (elapsed % CYCLE_MS) / CYCLE_MS;
-    const mode = this.currentMode(elapsed);
+    const phase = this.animationPhase(elapsed);
+    const mode = this.currentMode();
     const jumbleAmount =
-      smoothstep(0.18, 0.48, cycle) * (1 - smoothstep(0.76, 0.96, cycle));
+      smoothstep(phase.readEnd, phase.animateInEnd, phase.cycle) *
+      (1 - smoothstep(phase.animateOutStart, phase.animateEnd, phase.cycle));
 
     ctx.clearRect(0, 0, width, height);
     ctx.fillStyle = this.canvasWashColor();
     ctx.fillRect(0, 0, width, height);
 
-    const palette = this.activeTextPalette();
+    const palettes = this.activeTextPalettes();
     let incomingAlpha = 1;
+    let incomingRevealProgress = 1;
 
     if (this.outgoingGlyphs.length && this.transitionStartedAt) {
+      const transitionDuration =
+        this.transitionMode === "type"
+          ? TEXT_TYPE_TRANSITION_MS
+          : TEXT_TRANSITION_MS;
       const transitionProgress = clamp(
-        (now - this.transitionStartedAt) / TEXT_TRANSITION_MS,
+        (now - this.transitionStartedAt) / transitionDuration,
         0,
         1
       );
-      const easedProgress = smoothstep(0, 1, transitionProgress);
 
-      this.drawGlyphs(
-        ctx,
-        this.outgoingGlyphs,
-        palette,
-        mode,
-        now,
-        width,
-        height,
-        jumbleAmount,
-        1 - easedProgress
-      );
-      incomingAlpha = easedProgress;
+      if (this.transitionMode === "type") {
+        const fadeOutProgress = clamp(
+          (now - this.transitionStartedAt) / TEXT_TYPE_FADE_OUT_MS,
+          0,
+          1
+        );
+        const typingProgress = clamp(
+          (now - this.transitionStartedAt - TEXT_TYPE_FADE_OUT_MS) /
+            (TEXT_TYPE_TRANSITION_MS - TEXT_TYPE_FADE_OUT_MS),
+          0,
+          1
+        );
+
+        this.drawGlyphs(
+          ctx,
+          this.outgoingGlyphs,
+          palettes,
+          mode,
+          now,
+          width,
+          height,
+          jumbleAmount,
+          1 - smoothstep(0, 1, fadeOutProgress)
+        );
+        incomingAlpha = smoothstep(0, 0.18, typingProgress);
+        incomingRevealProgress = smoothstep(0, 1, typingProgress);
+      } else {
+        const easedProgress = smoothstep(0, 1, transitionProgress);
+
+        this.drawGlyphs(
+          ctx,
+          this.outgoingGlyphs,
+          palettes,
+          mode,
+          now,
+          width,
+          height,
+          jumbleAmount,
+          1 - easedProgress
+        );
+        incomingAlpha = easedProgress;
+      }
 
       if (transitionProgress >= 1) {
         this.outgoingGlyphs = [];
         this.transitionStartedAt = null;
+        incomingAlpha = 1;
+        incomingRevealProgress = 1;
       }
     }
 
     this.drawGlyphs(
       ctx,
       this.glyphs,
-      palette,
+      palettes,
       mode,
       now,
       width,
       height,
       jumbleAmount,
-      incomingAlpha
+      incomingAlpha,
+      incomingRevealProgress
     );
   }
 
   drawGlyphs(
     ctx,
     glyphs,
-    palette,
+    palettes,
     mode,
     now,
     width,
     height,
     jumbleAmount,
-    alpha
+    alpha,
+    revealProgress = 1
   ) {
     if (alpha <= 0) {
       return;
     }
 
     for (const glyph of glyphs) {
+      const glyphReveal = clamp(
+        revealProgress * glyphs.length - glyph.index,
+        0,
+        1
+      );
+
+      if (glyphReveal <= 0) {
+        continue;
+      }
+
       const target = this.targetForGlyph(
         glyph,
         mode,
@@ -527,17 +679,15 @@ export default class TextJumbleScreenSaver extends Component {
         glyphs.length
       );
       const wave =
-        Math.sin(now * 0.0017 + glyph.index * 0.37) * 7 * jumbleAmount;
+        mode === "slot_machine"
+          ? 0
+          : Math.sin(now * 0.0017 + glyph.index * 0.37) * 7 * jumbleAmount;
       const x = glyph.x + (target.x - glyph.x) * jumbleAmount + wave;
       const y = glyph.y + (target.y - glyph.y) * jumbleAmount;
       const rotation = (target.rotation || 0) * jumbleAmount;
       const scale = 1 + ((target.scale || 1) - 1) * jumbleAmount;
-      const colorUnit =
-        this.colorScope === "words"
-          ? glyph.wordIndex * 2
-          : glyph.index + glyph.lineIndex * 3;
-      const colorIndex =
-        (colorUnit + Math.floor(now / 2800)) % palette.fills.length;
+      const palette = palettes[glyph.colorPaletteMode] || palettes.spectrum;
+      const colorIndex = glyph.colorIndex % palette.fills.length;
       const fillColor = palette.fills[colorIndex];
 
       ctx.save();
@@ -547,7 +697,8 @@ export default class TextJumbleScreenSaver extends Component {
       ctx.font = `${glyph.fontSize}px Georgia, serif`;
       ctx.textAlign = "center";
       ctx.textBaseline = "middle";
-      ctx.globalAlpha = alpha * (0.94 + jumbleAmount * 0.06);
+      ctx.globalAlpha =
+        alpha * smoothstep(0, 1, glyphReveal) * (0.94 + jumbleAmount * 0.06);
       this.drawGlyphSprite(ctx, glyph, fillColor, palette.stroke);
       ctx.restore();
     }
@@ -596,14 +747,60 @@ export default class TextJumbleScreenSaver extends Component {
     return { canvas, height, width };
   }
 
-  currentMode(elapsed) {
+  currentMode() {
     const configured = settings.text_jumble_animation_mode;
 
     if (configured && configured !== "mixed") {
       return configured;
     }
 
-    return MODES[Math.floor(elapsed / CYCLE_MS) % MODES.length];
+    return MODES[Math.max(this.animationModeIndex, 0) % MODES.length];
+  }
+
+  animationCycleMs() {
+    return this.readHoldMs() + ANIMATION_MS + this.afterAnimationReadHoldMs();
+  }
+
+  animationPhase(elapsed) {
+    const cycleMs = this.animationCycleMs();
+    const readMs = this.readHoldMs();
+    const cycleElapsed = clamp(elapsed, 0, cycleMs);
+    const cycle = cycleElapsed / cycleMs;
+    const readEnd = readMs / cycleMs;
+    const animationSpan = ANIMATION_MS / cycleMs;
+    const animateInEnd = readEnd + animationSpan * 0.36;
+    const animateOutStart = readEnd + animationSpan * 0.76;
+    const animateEnd = readEnd + animationSpan * 0.96;
+
+    return {
+      animateEnd,
+      animateInEnd,
+      animateOutStart,
+      cycle,
+      cycleElapsed,
+      cycleMs,
+      readEnd,
+    };
+  }
+
+  msUntilNextParagraph(now = performance.now()) {
+    const elapsed = now - this.startedAt;
+    const phase = this.animationPhase(elapsed);
+
+    return Math.max(Math.ceil(phase.cycleMs - phase.cycleElapsed), 0);
+  }
+
+  readHoldMs() {
+    return Math.max(Number(settings.text_jumble_read_seconds) || 0, 0) * 1000;
+  }
+
+  afterAnimationReadHoldMs() {
+    return (
+      Math.max(
+        Number(settings.text_jumble_after_animation_read_seconds) || 0,
+        0
+      ) * 1000
+    );
   }
 
   canvasWashColor() {
@@ -674,7 +871,7 @@ export default class TextJumbleScreenSaver extends Component {
     return parseRgb(rootStyle.getPropertyValue("--secondary-rgb"), [8, 11, 16]);
   }
 
-  activeTextPalette() {
+  activeTextPalettes() {
     const style = getComputedStyle(document.documentElement);
     const primary = parseRgb(
       style.getPropertyValue("--primary-rgb"),
@@ -692,34 +889,26 @@ export default class TextJumbleScreenSaver extends Component {
       style.getPropertyValue("--quaternary-rgb"),
       tertiary
     );
-    const headerPrimary = parseRgb(
-      style.getPropertyValue("--header_primary-rgb"),
-      primary
-    );
-    const foregroundStops = [primary, headerPrimary, tertiary, quaternary];
-    const levelCount = 12;
-    const fills = [];
+    const spectrumFills = [];
 
-    for (let level = 0; level < levelCount; level++) {
-      const position = level / (levelCount - 1);
-      const scaled = position * (foregroundStops.length - 1);
-      const stopIndex = Math.min(
-        Math.floor(scaled),
-        foregroundStops.length - 2
-      );
-      const localAmount = scaled - stopIndex;
-      const color = mixRgb(
-        foregroundStops[stopIndex],
-        foregroundStops[stopIndex + 1],
-        localAmount
-      );
-
-      fills.push(rgbString(color, 0.94));
+    for (let level = 0; level < SPECTRUM_PALETTE_LEVEL_COUNT; level++) {
+      const position = level / (SPECTRUM_PALETTE_LEVEL_COUNT - 1);
+      spectrumFills.push(rgbString(mixRgb(primary, tertiary, position), 0.94));
     }
 
     return {
-      fills,
-      stroke: rgbString(secondary, 0.76),
+      spectrum: {
+        fills: spectrumFills,
+        stroke: rgbString(secondary, 0.76),
+      },
+      structured: {
+        fills: [
+          rgbString(primary, 0.94),
+          rgbString(tertiary, 0.94),
+          rgbString(quaternary, 0.94),
+        ],
+        stroke: rgbString(secondary, 0.76),
+      },
     };
   }
 
@@ -761,7 +950,7 @@ export default class TextJumbleScreenSaver extends Component {
 
     if (mode === "sorting") {
       const columns = 28;
-      const rows = Math.ceil(this.glyphs.length / columns);
+      const rows = Math.ceil(glyphCount / columns);
       const rank = glyph.sortedRank;
 
       return {
@@ -771,6 +960,148 @@ export default class TextJumbleScreenSaver extends Component {
           height / 2 -
           (rows * glyph.fontSize * 0.66) / 2 +
           Math.floor(rank / columns) * glyph.fontSize * 0.66,
+      };
+    }
+
+    if (mode === "wave") {
+      const columns = Math.max(24, Math.ceil(Math.sqrt(glyphCount) * 1.7));
+      const column = glyph.index % columns;
+      const row = Math.floor(glyph.index / columns);
+      const rows = Math.ceil(glyphCount / columns);
+      const x = width * 0.12 + column * ((width * 0.76) / columns);
+      const baseline =
+        height / 2 -
+        (rows * glyph.fontSize * 0.72) / 2 +
+        row * glyph.fontSize * 0.72;
+      const wave = Math.sin(column * 0.42 + now * 0.0011 + row * 0.65);
+
+      return {
+        rotation: wave * 0.32,
+        scale: 0.95 + Math.abs(wave) * 0.12,
+        x,
+        y: baseline + wave * Math.min(height * 0.08, 48),
+      };
+    }
+
+    if (mode === "orbit") {
+      const ringCount = 4;
+      const ring = glyph.index % ringCount;
+      const ringProgress =
+        Math.floor(glyph.index / ringCount) /
+        Math.max(1, Math.ceil(glyphCount / ringCount));
+      const angle =
+        ringProgress * Math.PI * 2 + now * (0.00016 + ring * 0.00005);
+      const radius =
+        Math.min(width, height) * (0.16 + ring * 0.085) +
+        Math.sin(now * 0.0008 + glyph.index) * 10;
+
+      return {
+        rotation: angle + Math.PI / 2,
+        scale: 0.9 + ring * 0.04,
+        x: width / 2 + Math.cos(angle) * radius,
+        y: height / 2 + Math.sin(angle) * radius,
+      };
+    }
+
+    if (mode === "columns") {
+      const columns = Math.max(
+        8,
+        Math.min(18, Math.ceil(Math.sqrt(glyphCount) * 0.7))
+      );
+      const column = glyph.wordIndex % columns;
+      const row = Math.floor(glyph.index / columns);
+      const rowHeight = glyph.fontSize * 0.72;
+      const drift =
+        ((now * 0.018 + glyph.index * 13 + column * 31) % (height * 0.78)) -
+        height * 0.39;
+
+      return {
+        rotation: column % 2 ? -Math.PI / 2 : Math.PI / 2,
+        scale: 0.92,
+        x: width * 0.14 + column * ((width * 0.72) / Math.max(columns - 1, 1)),
+        y: height / 2 + drift + (row % 3) * rowHeight * 0.34,
+      };
+    }
+
+    if (mode === "dominos") {
+      const phase = this.animationPhase(now - this.startedAt);
+      const dominoProgress = clamp(
+        (phase.cycle - phase.readEnd) /
+          Math.max(phase.animateOutStart - phase.readEnd, 0.01),
+        0,
+        1
+      );
+      const fallProgress = smoothstep(
+        0,
+        1,
+        (dominoProgress * glyphCount - glyph.dominoIndex) / 3
+      );
+      const direction = glyph.lineIndex % 2 === 0 ? 1 : -1;
+
+      return {
+        rotation: direction * fallProgress * Math.PI * 0.5,
+        x: glyph.x + direction * glyph.fontSize * 0.28 * fallProgress,
+        y: glyph.y + glyph.fontSize * 0.36 * fallProgress,
+      };
+    }
+
+    if (mode === "slot_machine") {
+      const columns = Math.max(8, Math.ceil(Math.sqrt(glyphCount * (16 / 9))));
+      const rows = Math.ceil(glyphCount / columns);
+      const cell = Math.min((width * 0.78) / columns, (height * 0.68) / rows);
+      const gridWidth = (columns - 1) * cell;
+      const gridHeight = (rows - 1) * cell;
+      const baseColumn = glyph.index % columns;
+      const baseRow = Math.floor(glyph.index / columns);
+      const phase = this.animationPhase(now - this.startedAt);
+      const slotProgress = clamp(
+        (phase.cycle - phase.animateInEnd) /
+          Math.max(phase.animateOutStart - phase.animateInEnd, 0.01),
+        0,
+        1
+      );
+      const operationCount = 7;
+      const operationProgress = clamp((slotProgress - 0.12) / 0.78, 0, 1);
+      const activeStep = operationProgress * operationCount;
+      let shiftedColumn = baseColumn;
+      let shiftedRow = baseRow;
+
+      for (let step = 0; step < operationCount; step++) {
+        const localProgress = clamp(activeStep - step, 0, 1);
+
+        if (localProgress <= 0) {
+          continue;
+        }
+
+        const slideProgress =
+          localProgress < 0.35 ? smoothstep(0, 1, localProgress / 0.35) : 1;
+        const seed = this.slotMachineSeed + step * 101;
+        const isRowShift = seededUnit(seed) < 0.5;
+        const direction = seededUnit(seed + 17) < 0.5 ? -1 : 1;
+
+        if (isRowShift) {
+          const row = Math.floor(seededUnit(seed + 31) * rows);
+
+          if (Math.round(shiftedRow) === row) {
+            shiftedColumn += direction * slideProgress;
+          }
+        } else {
+          const column = Math.floor(seededUnit(seed + 43) * columns);
+
+          if (Math.round(shiftedColumn) === column) {
+            shiftedRow += direction * slideProgress;
+          }
+        }
+
+        shiftedColumn = (shiftedColumn + columns) % columns;
+        shiftedRow = (shiftedRow + rows) % rows;
+      }
+
+      return {
+        rotation: 0,
+        scale: 0.94,
+        x: width / 2 - gridWidth / 2 + shiftedColumn * cell,
+        y: height / 2 - gridHeight / 2 + shiftedRow * cell,
       };
     }
 

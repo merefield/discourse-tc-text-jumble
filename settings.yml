@@ -22,8 +22,11 @@ text_jumble_topic_source:
 text_jumble_min_paragraph_length:
   default: 180
 
-text_jumble_cycle_seconds:
-  default: 45
+text_jumble_read_seconds:
+  default: 8
+
+text_jumble_after_animation_read_seconds:
+  default: 8
 
 text_jumble_animation_mode:
   default: "mixed"
@@ -34,6 +37,11 @@ text_jumble_animation_mode:
     - spiral
     - sorting
     - slots
+    - wave
+    - orbit
+    - columns
+    - dominos
+    - slot_machine
 
 text_jumble_fallback_text:
   default: "Discourse turns conversation into structure: paragraphs become lattices, letters find rails, sentences fold into circles, and the page drifts back toward readability before it changes shape again."
