@@ -20,6 +20,7 @@ const ACTIVITY_EVENTS = [
 const MODES = ["grid", "spiral", "sorting", "slots"];
 const CYCLE_MS = 22000;
 const MAX_GLYPHS = 1100;
+const TEXT_TRANSITION_MS = 1600;
 
 function clamp(value, min, max) {
   return Math.min(Math.max(value, min), max);
@@ -109,15 +110,19 @@ export default class TextJumbleScreenSaver extends Component {
 
   animationFrame = null;
   canvas = null;
+  colorScope = "letters";
   context = null;
   glyphs = [];
+  glyphSpriteCache = new Map();
   idleTimer = null;
+  outgoingGlyphs = [];
   paragraph = "";
   paragraphTimer = null;
   resizeObserver = null;
   root = null;
   stage = null;
   startedAt = 0;
+  transitionStartedAt = null;
 
   @action
   setup(element) {
@@ -184,6 +189,7 @@ export default class TextJumbleScreenSaver extends Component {
   }
 
   async show() {
+    this.colorScope = Math.random() < 0.5 ? "letters" : "words";
     this.isVisible = true;
     await this.loadParagraph();
     this.scheduleNextParagraph();
@@ -240,6 +246,12 @@ export default class TextJumbleScreenSaver extends Component {
   async loadParagraph() {
     const fallbackText = settings.text_jumble_fallback_text;
 
+    if (settings.text_jumble_text_source === "quotes") {
+      this.loadQuoteParagraph(fallbackText);
+      this.prepareGlyphs({ transition: true });
+      return;
+    }
+
     try {
       const list = await ajax(
         getURL(topicListUrl(settings.text_jumble_topic_source))
@@ -272,7 +284,23 @@ export default class TextJumbleScreenSaver extends Component {
       this.sourceTitle = "";
     }
 
-    this.prepareGlyphs();
+    this.prepareGlyphs({ transition: true });
+  }
+
+  loadQuoteParagraph(fallbackText) {
+    const quotes = [
+      settings.text_jumble_quote_1,
+      settings.text_jumble_quote_2,
+      settings.text_jumble_quote_3,
+      settings.text_jumble_quote_4,
+      settings.text_jumble_quote_5,
+    ]
+      .map((quote) => quote?.trim())
+      .filter(Boolean);
+
+    this.paragraph =
+      quotes[Math.floor(Math.random() * quotes.length)] || fallbackText;
+    this.sourceTitle = "";
   }
 
   resize() {
@@ -292,7 +320,7 @@ export default class TextJumbleScreenSaver extends Component {
     this.prepareGlyphs();
   }
 
-  prepareGlyphs() {
+  prepareGlyphs({ transition = false } = {}) {
     if (!this.context || !this.canvas || !this.paragraph) {
       return;
     }
@@ -331,15 +359,22 @@ export default class TextJumbleScreenSaver extends Component {
     const totalHeight = lines.length * lineHeight;
     const startY = height / 2 - totalHeight / 2;
     const glyphs = [];
+    let globalWordIndex = 0;
 
     lines.forEach((textLine, lineIndex) => {
       let x = width / 2 - ctx.measureText(textLine).width / 2;
       const y = startY + lineIndex * lineHeight;
+      let isInsideWord = false;
+      let lineWordIndex = globalWordIndex;
 
       [...textLine].forEach((char, columnIndex) => {
         const charWidth = ctx.measureText(char).width;
 
         if (char !== " ") {
+          if (!isInsideWord) {
+            isInsideWord = true;
+          }
+
           glyphs.push({
             char,
             columnIndex,
@@ -347,13 +382,23 @@ export default class TextJumbleScreenSaver extends Component {
             index: glyphs.length,
             lineIndex,
             width: charWidth,
+            wordIndex: lineWordIndex,
             x: x + charWidth / 2,
             y,
           });
+        } else if (isInsideWord) {
+          isInsideWord = false;
+          lineWordIndex++;
         }
 
         x += charWidth;
       });
+
+      if (isInsideWord) {
+        lineWordIndex++;
+      }
+
+      globalWordIndex = lineWordIndex;
     });
 
     const sorted = [...glyphs].sort((a, b) => {
@@ -366,8 +411,15 @@ export default class TextJumbleScreenSaver extends Component {
     });
     sorted.forEach((glyph, rank) => (glyph.sortedRank = rank));
 
+    if (transition && this.glyphs.length) {
+      this.outgoingGlyphs = this.glyphs;
+      this.transitionStartedAt = performance.now();
+    } else {
+      this.outgoingGlyphs = [];
+      this.transitionStartedAt = null;
+    }
+
     this.glyphs = glyphs;
-    this.startedAt = performance.now();
   }
 
   startAnimation() {
@@ -408,21 +460,85 @@ export default class TextJumbleScreenSaver extends Component {
     ctx.fillRect(0, 0, width, height);
 
     const palette = this.activeTextPalette();
-    this.drawGuideGeometry(ctx, width, height, mode, jumbleAmount, now);
+    let incomingAlpha = 1;
 
-    for (const glyph of this.glyphs) {
-      const target = this.targetForGlyph(glyph, mode, now, width, height);
+    if (this.outgoingGlyphs.length && this.transitionStartedAt) {
+      const transitionProgress = clamp(
+        (now - this.transitionStartedAt) / TEXT_TRANSITION_MS,
+        0,
+        1
+      );
+      const easedProgress = smoothstep(0, 1, transitionProgress);
+
+      this.drawGlyphs(
+        ctx,
+        this.outgoingGlyphs,
+        palette,
+        mode,
+        now,
+        width,
+        height,
+        jumbleAmount,
+        1 - easedProgress
+      );
+      incomingAlpha = easedProgress;
+
+      if (transitionProgress >= 1) {
+        this.outgoingGlyphs = [];
+        this.transitionStartedAt = null;
+      }
+    }
+
+    this.drawGlyphs(
+      ctx,
+      this.glyphs,
+      palette,
+      mode,
+      now,
+      width,
+      height,
+      jumbleAmount,
+      incomingAlpha
+    );
+  }
+
+  drawGlyphs(
+    ctx,
+    glyphs,
+    palette,
+    mode,
+    now,
+    width,
+    height,
+    jumbleAmount,
+    alpha
+  ) {
+    if (alpha <= 0) {
+      return;
+    }
+
+    for (const glyph of glyphs) {
+      const target = this.targetForGlyph(
+        glyph,
+        mode,
+        now,
+        width,
+        height,
+        glyphs.length
+      );
       const wave =
         Math.sin(now * 0.0017 + glyph.index * 0.37) * 7 * jumbleAmount;
       const x = glyph.x + (target.x - glyph.x) * jumbleAmount + wave;
       const y = glyph.y + (target.y - glyph.y) * jumbleAmount;
       const rotation = (target.rotation || 0) * jumbleAmount;
       const scale = 1 + ((target.scale || 1) - 1) * jumbleAmount;
+      const colorUnit =
+        this.colorScope === "words"
+          ? glyph.wordIndex * 2
+          : glyph.index + glyph.lineIndex * 3;
       const colorIndex =
-        (glyph.index + glyph.lineIndex * 3 + Math.floor(now / 2800)) %
-        palette.fills.length;
+        (colorUnit + Math.floor(now / 2800)) % palette.fills.length;
       const fillColor = palette.fills[colorIndex];
-      const glowColor = palette.glows[colorIndex];
 
       ctx.save();
       ctx.translate(x, y);
@@ -431,15 +547,53 @@ export default class TextJumbleScreenSaver extends Component {
       ctx.font = `${glyph.fontSize}px Georgia, serif`;
       ctx.textAlign = "center";
       ctx.textBaseline = "middle";
-      ctx.lineWidth = Math.max(glyph.fontSize * 0.08, 1.4);
-      ctx.strokeStyle = palette.stroke;
-      ctx.fillStyle = fillColor;
-      ctx.shadowColor = glowColor;
-      ctx.shadowBlur = 10 + 18 * jumbleAmount;
-      ctx.strokeText(glyph.char, 0, 0);
-      ctx.fillText(glyph.char, 0, 0);
+      ctx.globalAlpha = alpha * (0.94 + jumbleAmount * 0.06);
+      this.drawGlyphSprite(ctx, glyph, fillColor, palette.stroke);
       ctx.restore();
     }
+  }
+
+  drawGlyphSprite(ctx, glyph, fillColor, strokeColor) {
+    const cacheKey = [glyph.char, glyph.fontSize, fillColor, strokeColor].join(
+      "|"
+    );
+    let sprite = this.glyphSpriteCache.get(cacheKey);
+
+    if (!sprite) {
+      sprite = this.buildGlyphSprite(glyph, fillColor, strokeColor);
+      this.glyphSpriteCache.set(cacheKey, sprite);
+    }
+
+    ctx.drawImage(
+      sprite.canvas,
+      -sprite.width / 2,
+      -sprite.height / 2,
+      sprite.width,
+      sprite.height
+    );
+  }
+
+  buildGlyphSprite(glyph, fillColor, strokeColor) {
+    const padding = Math.ceil(glyph.fontSize * 0.24);
+    const width = Math.ceil(glyph.width + padding * 2);
+    const height = Math.ceil(glyph.fontSize * 1.5 + padding * 2);
+    const canvas = document.createElement("canvas");
+    const ctx = canvas.getContext("2d");
+
+    canvas.width = width;
+    canvas.height = height;
+
+    ctx.translate(width / 2, height / 2);
+    ctx.font = `${glyph.fontSize}px Georgia, serif`;
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.lineWidth = Math.max(glyph.fontSize * 0.08, 1.4);
+    ctx.strokeStyle = strokeColor;
+    ctx.fillStyle = fillColor;
+    ctx.strokeText(glyph.char, 0, 0);
+    ctx.fillText(glyph.char, 0, 0);
+
+    return { canvas, height, width };
   }
 
   currentMode(elapsed) {
@@ -457,7 +611,7 @@ export default class TextJumbleScreenSaver extends Component {
       .getPropertyValue("--text-jumble-background-rgb")
       .trim();
 
-    return stageRgb ? `rgba(${stageRgb}, 0.18)` : "rgba(8, 11, 16, 0.18)";
+    return stageRgb ? `rgba(${stageRgb}, 0.24)` : "rgba(8, 11, 16, 0.24)";
   }
 
   applyBackgroundPalette() {
@@ -490,11 +644,11 @@ export default class TextJumbleScreenSaver extends Component {
     this.stage.style.setProperty("--text-jumble-filter-rgb", filter.join(", "));
     this.stage.style.setProperty(
       "--text-jumble-filter-opacity-start",
-      isLightBackground ? "0.08" : "0.06"
+      isLightBackground ? "0.12" : "0.1"
     );
     this.stage.style.setProperty(
       "--text-jumble-filter-opacity-end",
-      isLightBackground ? "0.13" : "0.1"
+      isLightBackground ? "0.2" : "0.16"
     );
   }
 
@@ -545,7 +699,6 @@ export default class TextJumbleScreenSaver extends Component {
     const foregroundStops = [primary, headerPrimary, tertiary, quaternary];
     const levelCount = 12;
     const fills = [];
-    const glows = [];
 
     for (let level = 0; level < levelCount; level++) {
       const position = level / (levelCount - 1);
@@ -560,61 +713,29 @@ export default class TextJumbleScreenSaver extends Component {
         foregroundStops[stopIndex + 1],
         localAmount
       );
-      const glow = mixRgb(color, primary, 0.28);
 
       fills.push(rgbString(color, 0.94));
-      glows.push(rgbString(glow, 0.44));
     }
 
     return {
       fills,
-      glows,
       stroke: rgbString(secondary, 0.76),
     };
   }
 
-  drawGuideGeometry(ctx, width, height, mode, amount, now) {
-    if (amount < 0.05) {
-      return;
-    }
-
-    ctx.save();
-    ctx.globalAlpha = amount * 0.28;
-    ctx.strokeStyle = "rgba(255, 255, 255, 0.5)";
-    ctx.lineWidth = Math.max(width / 900, 1);
-
-    if (mode === "spiral") {
-      ctx.beginPath();
-      for (let i = 0; i < 280; i++) {
-        const angle = i * 0.22 + now * 0.0002;
-        const radius = i * Math.min(width, height) * 0.0009;
-        const x = width / 2 + Math.cos(angle) * radius;
-        const y = height / 2 + Math.sin(angle) * radius;
-        i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
-      }
-      ctx.stroke();
-    } else {
-      const gap = Math.max(Math.min(width, height) / 12, 48);
-      for (let x = width * 0.12; x < width * 0.88; x += gap) {
-        ctx.beginPath();
-        ctx.moveTo(x, height * 0.16);
-        ctx.lineTo(x + Math.sin(now * 0.001 + x) * 24 * amount, height * 0.84);
-        ctx.stroke();
-      }
-    }
-
-    ctx.restore();
-  }
-
-  targetForGlyph(glyph, mode, now, width, height) {
+  targetForGlyph(
+    glyph,
+    mode,
+    now,
+    width,
+    height,
+    glyphCount = this.glyphs.length
+  ) {
     if (mode === "grid") {
-      const columns = Math.max(
-        Math.floor(Math.sqrt(this.glyphs.length) * 1.45),
-        1
-      );
+      const columns = Math.max(Math.floor(Math.sqrt(glyphCount) * 1.45), 1);
       const cell = Math.min(
         (width * 0.68) / columns,
-        (height * 0.7) / Math.ceil(this.glyphs.length / columns)
+        (height * 0.7) / Math.ceil(glyphCount / columns)
       );
       const column = glyph.index % columns;
       const row = Math.floor(glyph.index / columns);
@@ -627,8 +748,8 @@ export default class TextJumbleScreenSaver extends Component {
     }
 
     if (mode === "spiral") {
-      const angle = glyph.index * 0.31 + now * 0.00035;
-      const radius = Math.sqrt(glyph.index) * Math.min(width, height) * 0.017;
+      const angle = glyph.index * 0.24 + now * 0.00028;
+      const radius = Math.sqrt(glyph.index) * Math.min(width, height) * 0.021;
 
       return {
         rotation: angle + Math.PI / 2,
@@ -653,10 +774,7 @@ export default class TextJumbleScreenSaver extends Component {
       };
     }
 
-    const railCount = Math.max(
-      5,
-      Math.min(11, Math.ceil(this.glyphs.length / 85))
-    );
+    const railCount = Math.max(5, Math.min(11, Math.ceil(glyphCount / 85)));
     const rail = glyph.index % railCount;
     const slotWidth = width * 0.7;
     const offset =

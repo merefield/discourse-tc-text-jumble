@@ -6,8 +6,8 @@
   --text-jumble-screen-saver-top: var(--header-offset, 0px);
   --text-jumble-background-rgb: var(--secondary-rgb);
   --text-jumble-filter-rgb: var(--primary-rgb);
-  --text-jumble-filter-opacity-start: 0.08;
-  --text-jumble-filter-opacity-end: 0.12;
+  --text-jumble-filter-opacity-start: 0.12;
+  --text-jumble-filter-opacity-end: 0.18;
   position: fixed;
   inset: var(--text-jumble-screen-saver-top) 0 0 0;
   z-index: z("header") - 1;
@@ -31,7 +31,7 @@
       rgb(var(--text-jumble-background-rgb), 0.98) 54%,
       rgb(var(--text-jumble-background-rgb), 1)
     );
-  backdrop-filter: blur(10px) saturate(0.8);
+  backdrop-filter: blur(12px) saturate(0.72);
   opacity: 0;
   pointer-events: auto;
   animation: text-jumble-screen-saver-fade-in 420ms ease-out forwards;
@@ -42,21 +42,10 @@
   position: absolute;
   inset: 0;
   z-index: 0;
-  background:
-    linear-gradient(
-      rgb(
-        var(--text-jumble-filter-rgb),
-        var(--text-jumble-filter-opacity-start)
-      ),
-      rgb(var(--text-jumble-filter-rgb), var(--text-jumble-filter-opacity-end))
-    ),
-    repeating-linear-gradient(
-      0deg,
-      rgb(var(--text-jumble-filter-rgb), 0.014) 0,
-      rgb(var(--text-jumble-filter-rgb), 0.014) 1px,
-      transparent 1px,
-      transparent 4px
-    );
+  background: linear-gradient(
+    rgb(var(--text-jumble-filter-rgb), var(--text-jumble-filter-opacity-start)),
+    rgb(var(--text-jumble-filter-rgb), var(--text-jumble-filter-opacity-end))
+  );
 }
 
 .text-jumble-screen-saver__canvas {

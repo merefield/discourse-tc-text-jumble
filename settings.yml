@@ -4,6 +4,13 @@ text_jumble_enabled:
 text_jumble_idle_seconds:
   default: 30
 
+text_jumble_text_source:
+  default: "quotes"
+  type: enum
+  choices:
+    - quotes
+    - topics
+
 text_jumble_topic_source:
   default: "latest"
   type: enum
@@ -30,3 +37,18 @@ text_jumble_animation_mode:
 
 text_jumble_fallback_text:
   default: "Discourse turns conversation into structure: paragraphs become lattices, letters find rails, sentences fold into circles, and the page drifts back toward readability before it changes shape again."
+
+text_jumble_quote_1:
+  default: "It is better to debate a question without settling it than to settle a question without debating it."
+
+text_jumble_quote_2:
+  default: "The aim of argument, or of discussion, should not be victory, but progress."
+
+text_jumble_quote_3:
+  default: "If you have knowledge, let others light their candles in it."
+
+text_jumble_quote_4:
+  default: "The single biggest problem in communication is the illusion that it has taken place."
+
+text_jumble_quote_5:
+  default: "We have two ears and one mouth so that we can listen twice as much as we speak."
