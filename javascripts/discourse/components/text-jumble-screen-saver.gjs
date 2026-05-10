@@ -29,6 +29,7 @@ const MODES = [
   "slot_machine",
 ];
 const ANIMATION_MS = 18000;
+const ANIMATION_RETURN_RATIO = 0.28;
 const SPECTRUM_PALETTE_LEVEL_COUNT = 8;
 const STRUCTURED_PALETTE_LEVEL_COUNT = 12;
 const MAX_GLYPHS = 1100;
@@ -90,6 +91,10 @@ function relativeLuminance(rgb) {
 
 function rgbString(rgb, alpha) {
   return `rgba(${rgb.join(", ")}, ${alpha})`;
+}
+
+function normalizedRotation(angle) {
+  return Math.atan2(Math.sin(angle), Math.cos(angle));
 }
 
 function seededUnit(seed) {
@@ -769,8 +774,8 @@ export default class TextJumbleScreenSaver extends Component {
     const readEnd = readMs / cycleMs;
     const animationSpan = ANIMATION_MS / cycleMs;
     const animateInEnd = readEnd + animationSpan * 0.36;
-    const animateOutStart = readEnd + animationSpan * 0.76;
-    const animateEnd = readEnd + animationSpan * 0.96;
+    const animateEnd = readEnd + animationSpan;
+    const animateOutStart = animateEnd - animationSpan * ANIMATION_RETURN_RATIO;
 
     return {
       animateEnd,
@@ -941,7 +946,7 @@ export default class TextJumbleScreenSaver extends Component {
       const radius = Math.sqrt(glyph.index) * Math.min(width, height) * 0.021;
 
       return {
-        rotation: angle + Math.PI / 2,
+        rotation: normalizedRotation(angle + Math.PI / 2),
         scale: 0.95 + Math.sin(angle) * 0.12,
         x: width / 2 + Math.cos(angle) * radius,
         y: height / 2 + Math.sin(angle) * radius,
@@ -996,7 +1001,7 @@ export default class TextJumbleScreenSaver extends Component {
         Math.sin(now * 0.0008 + glyph.index) * 10;
 
       return {
-        rotation: angle + Math.PI / 2,
+        rotation: normalizedRotation(angle + Math.PI / 2),
         scale: 0.9 + ring * 0.04,
         x: width / 2 + Math.cos(angle) * radius,
         y: height / 2 + Math.sin(angle) * radius,
