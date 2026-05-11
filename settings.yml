@@ -47,20 +47,10 @@ text_jumble_renderer:
 text_jumble_disable_on_low_power:
   default: true
 
-text_jumble_animation_mode:
-  default: "mixed"
-  type: enum
-  choices:
-    - mixed
-    - grid
-    - spiral
-    - sorting
-    - slots
-    - wave
-    - orbit
-    - columns
-    - dominos
-    - slot_machine
+text_jumble_default_animation_styles:
+  default: "grid|spiral|sorting|slots|wave|orbit|columns|dominos|slot_machine"
+  type: list
+  list_type: compact
 
 text_jumble_fallback_text:
   default: "Discourse turns conversation into structure: paragraphs become lattices, letters find rails, sentences fold into circles, and the page drifts back toward readability before it changes shape again."

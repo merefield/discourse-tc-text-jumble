@@ -1,4 +1,20 @@
 en:
+  text_jumble:
+    animation_styles:
+      title: "Animation styles"
+      grid: "Grid"
+      spiral: "Spiral"
+      sorting: "Sorting"
+      slots: "Slots"
+      wave: "Wave"
+      orbit: "Orbit"
+      columns: "Columns"
+      dominos: "Dominos"
+      slot_machine: "Slot machine"
+    preferences:
+      title: "Text Jumble"
+      disable_screen_saver: "Disable the Text Jumble screen saver on this browser"
+      local_storage_notice: "This setting is stored locally in this browser and takes effect immediately."
   theme_metadata:
     description: "Idle screensaver that turns paragraphs from public topics into animated geometric text."
     settings:
@@ -13,7 +29,7 @@ en:
       text_jumble_after_animation_read_seconds: "Seconds to keep text readable again after an animation cycle completes, before switching to a new quote or post."
       text_jumble_renderer: "Renderer used for drawing animated text."
       text_jumble_disable_on_low_power: "Disable the screensaver on very low-power devices or when reduced motion is requested."
-      text_jumble_animation_mode: "Animation mode for letter motion."
+      text_jumble_default_animation_styles: "Default animation styles selected before a user changes their local preference."
       text_jumble_fallback_text: "Fallback paragraph used when a topic paragraph cannot be loaded."
       text_jumble_quote_1: "First editable quote used when quote mode is enabled."
       text_jumble_quote_2: "Second editable quote used when quote mode is enabled."

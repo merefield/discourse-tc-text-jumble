@@ -54,6 +54,49 @@
   height: 100%;
 }
 
+.text-jumble-screen-saver__animation-menu {
+  position: absolute;
+  top: 1rem;
+  right: 1rem;
+  z-index: 3;
+  color: rgb(var(--secondary-rgb), 0.82);
+  font-size: var(--font-down-1);
+  line-height: var(--line-height-medium);
+}
+
+.text-jumble-screen-saver__animation-menu-trigger {
+  padding: 0.45rem 0.65rem;
+  color: inherit;
+  cursor: pointer;
+  background: rgb(var(--primary-rgb), 0.32);
+  border: 1px solid rgb(var(--secondary-rgb), 0.16);
+  border-radius: 4px;
+  backdrop-filter: blur(8px);
+}
+
+.text-jumble-screen-saver__animation-menu-panel {
+  position: absolute;
+  top: calc(100% + 0.35rem);
+  right: 0;
+  display: grid;
+  gap: 0.25rem;
+  min-width: 12rem;
+  padding: 0.55rem;
+  color: rgb(var(--secondary-rgb), 0.82);
+  background: rgb(var(--primary-rgb), 0.42);
+  border: 1px solid rgb(var(--secondary-rgb), 0.16);
+  border-radius: 4px;
+  backdrop-filter: blur(10px);
+}
+
+.text-jumble-screen-saver__animation-option {
+  display: flex;
+  gap: 0.45rem;
+  align-items: center;
+  margin: 0;
+  white-space: nowrap;
+}
+
 .text-jumble-screen-saver__source {
   position: absolute;
   right: 1rem;

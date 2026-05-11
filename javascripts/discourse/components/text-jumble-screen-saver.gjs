@@ -1,12 +1,23 @@
 /* global settings */
 import Component from "@glimmer/component";
 import { action } from "@ember/object";
+import { on } from "@ember/modifier";
 import { tracked } from "@glimmer/tracking";
 import didInsert from "@ember/render-modifiers/modifiers/did-insert";
 import willDestroy from "@ember/render-modifiers/modifiers/will-destroy";
 import { service } from "@ember/service";
 import { ajax } from "discourse/lib/ajax";
 import getURL from "discourse/lib/get-url";
+import { i18n } from "discourse-i18n";
+
+import {
+  isScreenSaverDisabled,
+  selectedAnimationModes,
+  setSelectedAnimationModes,
+  TEXT_JUMBLE_ANIMATION_MODES,
+  TEXT_JUMBLE_ANIMATION_STYLES_CHANGED,
+  TEXT_JUMBLE_SCREEN_SAVER_PREFERENCE_CHANGED,
+} from "../lib/text-jumble-preferences";
 
 const ACTIVITY_EVENTS = [
   "pointermove",
@@ -17,17 +28,6 @@ const ACTIVITY_EVENTS = [
   "scroll",
 ];
 
-const MODES = [
-  "grid",
-  "spiral",
-  "sorting",
-  "slots",
-  "wave",
-  "orbit",
-  "columns",
-  "dominos",
-  "slot_machine",
-];
 const ANIMATION_MS = 18000;
 const ANIMATION_RETURN_RATIO = 0.28;
 const SPECTRUM_PALETTE_LEVEL_COUNT = 8;
@@ -143,9 +143,12 @@ function topicListUrl(source) {
 }
 
 export default class TextJumbleScreenSaver extends Component {
+  @service currentUser;
   @service router;
 
+  @tracked isAnimationMenuOpen = false;
   @tracked isVisible = false;
+  @tracked selectedAnimationModes = [];
   @tracked sourceTitle = "";
   @tracked sourceUrl = "";
 
@@ -157,6 +160,7 @@ export default class TextJumbleScreenSaver extends Component {
   glyphs = [];
   glyphSpriteCache = new Map();
   idleTimer = null;
+  animationMenuElement = null;
   lastQuoteText = null;
   lastTopicId = null;
   outgoingGlyphs = [];
@@ -172,6 +176,8 @@ export default class TextJumbleScreenSaver extends Component {
   transitionMode = "crossfade";
   transitionStartedAt = null;
   webgl = null;
+  resizeListenerStarted = false;
+  screenSaverListenersStarted = false;
 
   get isPageMode() {
     return this.args.displayMode === "page";
@@ -193,29 +199,49 @@ export default class TextJumbleScreenSaver extends Component {
     return this.router.currentRouteName === "text-jumble";
   }
 
+  get isScreenSaverLocallyDisabled() {
+    return isScreenSaverDisabled(this.currentUser);
+  }
+
+  get hasSelectedAnimationModes() {
+    return this.selectedAnimationModes.length > 0;
+  }
+
+  get animationStyleOptions() {
+    const selected = new Set(this.selectedAnimationModes);
+
+    return TEXT_JUMBLE_ANIMATION_MODES.map((mode) => ({
+      ...mode,
+      selected: selected.has(mode.id),
+    }));
+  }
+
   @action
   setup(element) {
     this.root = element;
     this.boundResize = () => this.resize();
-
-    window.addEventListener("resize", this.boundResize, { passive: true });
+    this.refreshSelectedAnimationModes();
+    this.boundAnimationStylesChange = () => this.handleAnimationStylesChange();
+    window.addEventListener(
+      TEXT_JUMBLE_ANIMATION_STYLES_CHANGED,
+      this.boundAnimationStylesChange
+    );
 
     if (this.isPageMode) {
+      this.boundAnimationMenuOutside = (event) =>
+        this.handleAnimationMenuOutside(event);
+      document.addEventListener("pointerdown", this.boundAnimationMenuOutside, {
+        capture: true,
+      });
+      this.startResizeListener();
       this.show();
     } else {
-      this.boundActivity = () => this.handleActivity();
-      this.boundRouteChange = () => this.handleRouteChange();
-      this.boundVisibilityChange = () => this.handleVisibilityChange();
-
-      ACTIVITY_EVENTS.forEach((eventName) => {
-        window.addEventListener(eventName, this.boundActivity, {
-          passive: true,
-        });
-      });
-      document.addEventListener("visibilitychange", this.boundVisibilityChange);
-      this.router.on("routeDidChange", this.boundRouteChange);
-
-      this.scheduleIdle();
+      this.boundPreferenceChange = () => this.handlePreferenceChange();
+      window.addEventListener(
+        TEXT_JUMBLE_SCREEN_SAVER_PREFERENCE_CHANGED,
+        this.boundPreferenceChange
+      );
+      this.startScreenSaverListeners();
     }
   }
 
@@ -264,6 +290,11 @@ export default class TextJumbleScreenSaver extends Component {
   }
 
   @action
+  setupAnimationMenu(element) {
+    this.animationMenuElement = element;
+  }
+
+  @action
   teardownStage() {
     this.stopAnimation();
     this.resizeObserver?.disconnect();
@@ -281,21 +312,94 @@ export default class TextJumbleScreenSaver extends Component {
     clearTimeout(this.paragraphTimer);
     this.resizeObserver?.disconnect();
 
-    window.removeEventListener("resize", this.boundResize);
-
-    if (!this.isPageMode) {
-      ACTIVITY_EVENTS.forEach((eventName) => {
-        window.removeEventListener(eventName, this.boundActivity);
-      });
+    if (this.isPageMode) {
       document.removeEventListener(
-        "visibilitychange",
-        this.boundVisibilityChange
+        "pointerdown",
+        this.boundAnimationMenuOutside,
+        { capture: true }
       );
-      this.router.off("routeDidChange", this.boundRouteChange);
+      this.stopResizeListener();
+    } else {
+      this.stopScreenSaverListeners();
+      window.removeEventListener(
+        TEXT_JUMBLE_SCREEN_SAVER_PREFERENCE_CHANGED,
+        this.boundPreferenceChange
+      );
     }
+
+    window.removeEventListener(
+      TEXT_JUMBLE_ANIMATION_STYLES_CHANGED,
+      this.boundAnimationStylesChange
+    );
+  }
+
+  startResizeListener() {
+    if (this.resizeListenerStarted) {
+      return;
+    }
+
+    window.addEventListener("resize", this.boundResize, { passive: true });
+    this.resizeListenerStarted = true;
+  }
+
+  stopResizeListener() {
+    if (!this.resizeListenerStarted) {
+      return;
+    }
+
+    window.removeEventListener("resize", this.boundResize);
+    this.resizeListenerStarted = false;
+  }
+
+  startScreenSaverListeners() {
+    if (
+      this.screenSaverListenersStarted ||
+      this.isScreenSaverLocallyDisabled ||
+      !this.hasSelectedAnimationModes
+    ) {
+      return;
+    }
+
+    this.startResizeListener();
+    this.boundActivity = () => this.handleActivity();
+    this.boundRouteChange = () => this.handleRouteChange();
+    this.boundVisibilityChange = () => this.handleVisibilityChange();
+
+    ACTIVITY_EVENTS.forEach((eventName) => {
+      window.addEventListener(eventName, this.boundActivity, {
+        passive: true,
+      });
+    });
+    document.addEventListener("visibilitychange", this.boundVisibilityChange);
+    this.router.on("routeDidChange", this.boundRouteChange);
+    this.screenSaverListenersStarted = true;
+
+    this.scheduleIdle();
+  }
+
+  stopScreenSaverListeners() {
+    if (!this.screenSaverListenersStarted) {
+      return;
+    }
+
+    ACTIVITY_EVENTS.forEach((eventName) => {
+      window.removeEventListener(eventName, this.boundActivity);
+    });
+    document.removeEventListener(
+      "visibilitychange",
+      this.boundVisibilityChange
+    );
+    this.router.off("routeDidChange", this.boundRouteChange);
+    clearTimeout(this.idleTimer);
+    this.stopResizeListener();
+    this.screenSaverListenersStarted = false;
   }
 
   async show() {
+    if (!this.isPageMode && !this.hasSelectedAnimationModes) {
+      return;
+    }
+
     this.glyphs = [];
     this.outgoingGlyphs = [];
     this.transitionMode = Math.random() < 0.5 ? "crossfade" : "type";
@@ -386,12 +490,43 @@ export default class TextJumbleScreenSaver extends Component {
     }
   }
 
+  handlePreferenceChange() {
+    if (this.isScreenSaverLocallyDisabled) {
+      this.hide();
+      this.stopScreenSaverListeners();
+    } else {
+      this.startScreenSaverListeners();
+    }
+  }
+
+  handleAnimationStylesChange() {
+    this.refreshSelectedAnimationModes();
+
+    if (this.hasSelectedAnimationModes) {
+      this.animationModeIndex = -1;
+      this.prepareGlyphs();
+
+      if (!this.isPageMode) {
+        this.startScreenSaverListeners();
+      }
+    } else {
+      if (this.isPageMode) {
+        this.prepareGlyphs();
+      } else {
+        this.hide();
+        this.stopScreenSaverListeners();
+      }
+    }
+  }
+
   scheduleIdle() {
     clearTimeout(this.idleTimer);
 
     if (
       document.hidden ||
       !settings.text_jumble_screen_saver_enabled ||
+      this.isScreenSaverLocallyDisabled ||
+      !this.hasSelectedAnimationModes ||
       this.isTextJumbleRoute
     ) {
       return;
@@ -513,7 +648,9 @@ export default class TextJumbleScreenSaver extends Component {
     }
 
     if (transition || this.animationModeIndex < 0) {
-      this.animationModeIndex = (this.animationModeIndex + 1) % MODES.length;
+      this.animationModeIndex =
+        (this.animationModeIndex + 1) %
+        Math.max(this.selectedAnimationModes.length, 1);
     }
     this.slotMachineSeed = Math.random() * 10000;
 
@@ -705,9 +842,10 @@ export default class TextJumbleScreenSaver extends Component {
     const elapsed = now - this.startedAt;
     const phase = this.animationPhase(elapsed);
     const mode = this.currentMode();
-    const jumbleAmount =
-      smoothstep(phase.readEnd, phase.animateInEnd, phase.cycle) *
-      (1 - smoothstep(phase.animateOutStart, phase.animateEnd, phase.cycle));
+    const jumbleAmount = mode
+      ? smoothstep(phase.readEnd, phase.animateInEnd, phase.cycle) *
+        (1 - smoothstep(phase.animateOutStart, phase.animateEnd, phase.cycle))
+      : 0;
 
     this.clearRenderer(ctx, width, height);
 
@@ -1086,13 +1224,55 @@ export default class TextJumbleScreenSaver extends Component {
   }
 
   currentMode() {
-    const configured = settings.text_jumble_animation_mode;
-
-    if (configured && configured !== "mixed") {
-      return configured;
+    if (!this.selectedAnimationModes.length) {
+      return null;
     }
 
-    return MODES[Math.max(this.animationModeIndex, 0) % MODES.length];
+    return this.selectedAnimationModes[
+      Math.max(this.animationModeIndex, 0) % this.selectedAnimationModes.length
+    ];
+  }
+
+  refreshSelectedAnimationModes() {
+    this.selectedAnimationModes = selectedAnimationModes(
+      this.currentUser,
+      settings
+    );
+  }
+
+  @action
+  toggleAnimationStyle(event) {
+    const mode = event.target.value;
+    const selected = new Set(this.selectedAnimationModes);
+
+    if (event.target.checked) {
+      selected.add(mode);
+    } else {
+      selected.delete(mode);
+    }
+
+    const nextModes = TEXT_JUMBLE_ANIMATION_MODES.map(
+      (option) => option.id
+    ).filter((optionMode) => selected.has(optionMode));
+
+    this.selectedAnimationModes = nextModes;
+    setSelectedAnimationModes(this.currentUser, nextModes);
+  }
+
+  @action
+  toggleAnimationMenu() {
+    this.isAnimationMenuOpen = !this.isAnimationMenuOpen;
+  }
+
+  handleAnimationMenuOutside(event) {
+    if (
+      !this.isAnimationMenuOpen ||
+      this.animationMenuElement?.contains(event.target)
+    ) {
+      return;
+    }
+
+    this.isAnimationMenuOpen = false;
   }
 
   animationCycleMs() {
@@ -1467,6 +1647,38 @@ export default class TextJumbleScreenSaver extends Component {
           {{didInsert this.setupStage}}
           {{willDestroy this.teardownStage}}
         >
+          {{#if this.isPageMode}}
+            <div
+              class="text-jumble-screen-saver__animation-menu"
+              {{didInsert this.setupAnimationMenu}}
+            >
+              <button
+                type="button"
+                class="text-jumble-screen-saver__animation-menu-trigger"
+                aria-expanded={{this.isAnimationMenuOpen}}
+                {{on "click" this.toggleAnimationMenu}}
+              >
+                {{i18n (themePrefix "text_jumble.animation_styles.title")}}
+              </button>
+
+              {{#if this.isAnimationMenuOpen}}
+                <div class="text-jumble-screen-saver__animation-menu-panel">
+                  {{#each this.animationStyleOptions as |mode|}}
+                    <label class="text-jumble-screen-saver__animation-option">
+                      <input
+                        type="checkbox"
+                        value={{mode.id}}
+                        checked={{mode.selected}}
+                        {{on "change" this.toggleAnimationStyle}}
+                      />
+                      {{i18n (themePrefix mode.labelKey)}}
+                    </label>
+                  {{/each}}
+                </div>
+              {{/if}}
+            </div>
+          {{/if}}
+
           <canvas
             class="text-jumble-screen-saver__canvas"
             {{didInsert this.setupCanvas}}
