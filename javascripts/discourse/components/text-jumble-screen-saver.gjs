@@ -1627,41 +1627,63 @@ export default class TextJumbleScreenSaver extends Component {
         0,
         1
       );
-      const operationCount = 7;
+      const operationLocationCount = 8;
+      let operationCount = 0;
+      const operations = [];
+
+      for (
+        let locationIndex = 0;
+        locationIndex < operationLocationCount;
+        locationIndex++
+      ) {
+        const seed = this.slotMachineSeed + locationIndex * 101;
+        const shiftCount = 1 + Math.floor(seededUnit(seed + 29) * 3);
+
+        operationCount += shiftCount;
+        operations.push({ seed, shiftCount });
+      }
+
       const operationProgress = clamp((slotProgress - 0.12) / 0.78, 0, 1);
       const activeStep = operationProgress * operationCount;
       let shiftedColumn = baseColumn;
       let shiftedRow = baseRow;
+      let stepIndex = 0;
 
-      for (let step = 0; step < operationCount; step++) {
-        const localProgress = clamp(activeStep - step, 0, 1);
-
-        if (localProgress <= 0) {
-          continue;
-        }
-
-        const slideProgress =
-          localProgress < 0.35 ? smoothstep(0, 1, localProgress / 0.35) : 1;
-        const seed = this.slotMachineSeed + step * 101;
+      for (const operation of operations) {
+        const seed = operation.seed;
         const isRowShift = seededUnit(seed) < 0.5;
         const direction = seededUnit(seed + 17) < 0.5 ? -1 : 1;
+        const row = Math.floor(seededUnit(seed + 31) * rows);
+        const column = Math.floor(seededUnit(seed + 43) * columns);
 
-        if (isRowShift) {
-          const row = Math.floor(seededUnit(seed + 31) * rows);
+        for (
+          let shiftIndex = 0;
+          shiftIndex < operation.shiftCount;
+          shiftIndex++
+        ) {
+          const localProgress = clamp(activeStep - stepIndex, 0, 1);
+          stepIndex++;
 
-          if (Math.round(shiftedRow) === row) {
-            shiftedColumn += direction * slideProgress;
+          if (localProgress <= 0) {
+            continue;
           }
-        } else {
-          const column = Math.floor(seededUnit(seed + 43) * columns);
 
-          if (Math.round(shiftedColumn) === column) {
-            shiftedRow += direction * slideProgress;
+          const slideProgress =
+            localProgress < 0.35 ? smoothstep(0, 1, localProgress / 0.35) : 1;
+
+          if (isRowShift) {
+            if (Math.round(shiftedRow) === row) {
+              shiftedColumn += direction * slideProgress;
+            }
+          } else {
+            if (Math.round(shiftedColumn) === column) {
+              shiftedRow += direction * slideProgress;
+            }
           }
+
+          shiftedColumn = (shiftedColumn + columns) % columns;
+          shiftedRow = (shiftedRow + rows) % rows;
         }
-
-        shiftedColumn = (shiftedColumn + columns) % columns;
-        shiftedRow = (shiftedRow + rows) % rows;
       }
 
       return {
