@@ -1,4 +1,4 @@
-# discourse-text-jumble
+# discourse-tc-text-jumble
 
 A Discourse theme component that shows an idle screensaver below the header.
 It pulls a paragraph from a random visible topic and progressively rearranges
