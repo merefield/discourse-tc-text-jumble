@@ -12,6 +12,7 @@ en:
       slot_machine: "Slot machine"
       single_out: "Single out"
       heap: "Heap"
+      smash: "Smash"
     preferences:
       title: "Text Jumble"
       disable_screen_saver: "Disable the Text Jumble screen saver on this browser"

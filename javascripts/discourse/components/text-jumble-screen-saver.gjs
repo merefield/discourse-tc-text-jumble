@@ -162,6 +162,7 @@ export default class TextJumbleScreenSaver extends Component {
   glyphs = [];
   glyphSpriteCache = new Map();
   heapPhysics = null;
+  smashPhysics = null;
   idleTimer = null;
   animationMenuElement = null;
   lastQuoteText = null;
@@ -801,6 +802,7 @@ export default class TextJumbleScreenSaver extends Component {
 
     this.glyphs = glyphs;
     this.heapPhysics = null;
+    this.smashPhysics = null;
     this.startedAt = performance.now();
   }
 
@@ -1257,6 +1259,350 @@ export default class TextJumbleScreenSaver extends Component {
     }
   }
 
+  ensureSmashPhysics(width, height) {
+    if (
+      this.smashPhysics?.glyphCount === this.glyphs.length &&
+      this.smashPhysics?.width === width &&
+      this.smashPhysics?.height === height
+    ) {
+      return;
+    }
+
+    const lineGroups = new Map();
+
+    this.glyphs.forEach((glyph) => {
+      const line = lineGroups.get(glyph.lineIndex) || [];
+      line.push(glyph);
+      lineGroups.set(glyph.lineIndex, line);
+    });
+
+    const lines = [...lineGroups.values()]
+      .filter((line) => line.length >= 8)
+      .map((line) => [...line].sort((a, b) => a.x - b.x));
+    const packBounds = this.glyphs.reduce(
+      (bounds, glyph) => ({
+        bottom: Math.max(bounds.bottom, glyph.y + glyph.fontSize * 0.5),
+        left: Math.min(bounds.left, glyph.x - glyph.fontSize * 0.5),
+        right: Math.max(bounds.right, glyph.x + glyph.fontSize * 0.5),
+        top: Math.min(bounds.top, glyph.y - glyph.fontSize * 0.5),
+      }),
+      {
+        bottom: 0,
+        left: width,
+        right: 0,
+        top: height,
+      }
+    );
+    const candidates = [];
+
+    lines.forEach((line, lineRank) => {
+      const segmentCount = Math.min(
+        Math.max(8, Math.round(line.length * 0.24)),
+        22,
+        line.length
+      );
+      const maxStart = Math.max(line.length - segmentCount, 0);
+      const step = Math.max(1, Math.floor(maxStart / 5));
+
+      for (let start = 0; start <= maxStart; start += step) {
+        const segment = line.slice(start, start + segmentCount);
+        const segmentLeft = segment[0]?.x || 0;
+        const segmentRight = segment[segment.length - 1]?.x || width;
+        const segmentCenterY =
+          segment.reduce((sum, glyph) => sum + glyph.y, 0) /
+          Math.max(segment.length, 1);
+        const edgeOptions = [
+          {
+            edge: "left",
+            pullCenterX: width * 0.06,
+            pullCenterY: clamp(segmentCenterY, height * 0.12, height * 0.88),
+            scale: width,
+            whitespace: packBounds.left,
+          },
+          {
+            edge: "right",
+            pullCenterX: width * 0.94,
+            pullCenterY: clamp(segmentCenterY, height * 0.12, height * 0.88),
+            scale: width,
+            whitespace: width - packBounds.right,
+          },
+          {
+            edge: "top",
+            pullCenterX: clamp(
+              (segmentLeft + segmentRight) / 2,
+              width * 0.12,
+              width * 0.88
+            ),
+            pullCenterY: height * 0.06,
+            scale: height,
+            whitespace: packBounds.top,
+          },
+          {
+            edge: "bottom",
+            pullCenterX: clamp(
+              (segmentLeft + segmentRight) / 2,
+              width * 0.12,
+              width * 0.88
+            ),
+            pullCenterY: height * 0.94,
+            scale: height,
+            whitespace: height - packBounds.bottom,
+          },
+        ];
+
+        edgeOptions.forEach((edgeOption, edgeIndex) => {
+          const randomWeight = seededUnit(
+            this.glyphs.length + lineRank * 97 + start * 13 + edgeIndex * 29
+          );
+          const normalizedWhitespace =
+            edgeOption.whitespace / Math.max(edgeOption.scale, 1);
+
+          candidates.push({
+            edge: edgeOption.edge,
+            line,
+            pullCenterX: edgeOption.pullCenterX,
+            pullCenterY: edgeOption.pullCenterY,
+            score:
+              normalizedWhitespace * Math.max(width, height) +
+              randomWeight * Math.max(width, height) * 0.18,
+            segmentCount,
+            start,
+          });
+        });
+      }
+    });
+
+    const bestCandidate = candidates.sort((a, b) => b.score - a.score)[0];
+    const sourceLine = bestCandidate?.line || this.glyphs;
+    const segmentCount =
+      bestCandidate?.segmentCount || Math.min(12, sourceLine.length);
+    const segmentStart = bestCandidate?.start || 0;
+    const projectileIndexes = new Set(
+      sourceLine
+        .slice(segmentStart, segmentStart + segmentCount)
+        .map((glyph) => glyph.index)
+    );
+    const projectileGlyphs = this.glyphs.filter((glyph) =>
+      projectileIndexes.has(glyph.index)
+    );
+    const sourceCenterX =
+      projectileGlyphs.reduce((sum, glyph) => sum + glyph.x, 0) /
+      Math.max(projectileGlyphs.length, 1);
+    const sourceCenterY =
+      projectileGlyphs.reduce((sum, glyph) => sum + glyph.y, 0) /
+      Math.max(projectileGlyphs.length, 1);
+    const pullCenterX = bestCandidate?.pullCenterX ?? width * 0.06;
+    const pullCenterY = bestCandidate?.pullCenterY ?? sourceCenterY;
+    const packGlyphs = this.glyphs.filter(
+      (glyph) => !projectileIndexes.has(glyph.index)
+    );
+    const targetCenterX =
+      packGlyphs.reduce((sum, glyph) => sum + glyph.x, 0) /
+      Math.max(packGlyphs.length, 1);
+    const targetCenterY =
+      packGlyphs.reduce((sum, glyph) => sum + glyph.y, 0) /
+      Math.max(packGlyphs.length, 1);
+    const targetJitterX =
+      (seededUnit(this.glyphs.length + 547) - 0.5) * width * 0.16;
+    const targetJitterY =
+      (seededUnit(this.glyphs.length + 563) - 0.5) * height * 0.12;
+    const fireTargetX = clamp(
+      targetCenterX + targetJitterX,
+      width * 0.2,
+      width * 0.8
+    );
+    const fireTargetY = clamp(
+      targetCenterY + targetJitterY,
+      height * 0.22,
+      height * 0.78
+    );
+    const bodies = this.glyphs.map((glyph) => ({
+      active: projectileIndexes.has(glyph.index),
+      angularVelocity: 0,
+      isProjectile: projectileIndexes.has(glyph.index),
+      radius: Math.max(glyph.fontSize * 0.34, 6),
+      rotation: 0,
+      vx: 0,
+      vy: 0,
+      x: glyph.x,
+      y: glyph.y,
+    }));
+
+    this.smashPhysics = {
+      bodies,
+      fired: false,
+      fireTargetX,
+      fireTargetY,
+      glyphCount: this.glyphs.length,
+      height,
+      lastNow: null,
+      pullCenterX,
+      pullCenterY,
+      sourceCenterX,
+      sourceCenterY,
+      width,
+    };
+  }
+
+  updateSmashPhysics(now, width, height, phase) {
+    this.ensureSmashPhysics(width, height);
+
+    const physics = this.smashPhysics;
+    const deltaSeconds = Math.min(
+      physics.lastNow ? (now - physics.lastNow) / 1000 : 1 / 60,
+      1 / 30
+    );
+    physics.lastNow = now;
+
+    const smashProgress = clamp(
+      (phase.cycle - phase.readEnd) /
+        Math.max(phase.animateOutStart - phase.readEnd, 0.01),
+      0,
+      1
+    );
+    const formProgress = smoothstep(0, 1, clamp(smashProgress / 0.24, 0, 1));
+    const releaseProgress = smoothstep(
+      0,
+      1,
+      clamp((smashProgress - 0.24) / 0.12, 0, 1)
+    );
+    const fired = smashProgress >= 0.36;
+    const projectileBodies = physics.bodies.filter((body) => body.isProjectile);
+    const circleRadius = Math.max(
+      this.glyphs[0]?.fontSize || 20,
+      Math.sqrt(projectileBodies.length) *
+        (this.glyphs[0]?.fontSize || 20) *
+        0.34
+    );
+    const centerX =
+      physics.sourceCenterX +
+      (physics.pullCenterX - physics.sourceCenterX) * releaseProgress;
+    const centerY =
+      physics.sourceCenterY +
+      (physics.pullCenterY - physics.sourceCenterY) * releaseProgress;
+
+    if (!fired) {
+      projectileBodies.forEach((body, projectileIndex) => {
+        const glyph = this.glyphs[physics.bodies.indexOf(body)];
+        const angle =
+          (projectileIndex / Math.max(projectileBodies.length, 1)) *
+          Math.PI *
+          2;
+        const ringX = centerX + Math.cos(angle) * circleRadius;
+        const ringY = centerY + Math.sin(angle) * circleRadius;
+
+        body.x = glyph.x + (ringX - glyph.x) * formProgress;
+        body.y = glyph.y + (ringY - glyph.y) * formProgress;
+        body.rotation = (angle + Math.PI / 2) * formProgress;
+      });
+
+      return;
+    }
+
+    if (!physics.fired) {
+      physics.fired = true;
+      projectileBodies.forEach((body) => {
+        const targetX =
+          physics.fireTargetX + (seededUnit(body.x + 701) - 0.5) * width * 0.04;
+        const targetY =
+          physics.fireTargetY +
+          (seededUnit(body.y + 719) - 0.5) * height * 0.04;
+        const dx = targetX - body.x;
+        const dy = targetY - body.y;
+        const length = Math.hypot(dx, dy) || 1;
+        const speed = Math.max(width, height) * 1.18;
+
+        body.vx = (dx / length) * speed;
+        body.vy = (dy / length) * speed;
+        body.angularVelocity = Math.sign(dx || 1) * 5;
+      });
+    }
+
+    physics.bodies.forEach((body) => {
+      body.x += body.vx * deltaSeconds;
+      body.y += body.vy * deltaSeconds;
+      body.rotation += body.angularVelocity * deltaSeconds;
+
+      if (body.x < body.radius) {
+        body.x = body.radius;
+        body.vx = Math.abs(body.vx) * 0.76;
+        body.angularVelocity *= -0.7;
+      } else if (body.x > width - body.radius) {
+        body.x = width - body.radius;
+        body.vx = -Math.abs(body.vx) * 0.76;
+        body.angularVelocity *= -0.7;
+      }
+
+      if (body.y < body.radius) {
+        body.y = body.radius;
+        body.vy = Math.abs(body.vy) * 0.76;
+        body.angularVelocity *= -0.7;
+      } else if (body.y > height - body.radius) {
+        body.y = height - body.radius;
+        body.vy = -Math.abs(body.vy) * 0.76;
+        body.angularVelocity *= -0.7;
+      }
+    });
+
+    this.resolveSmashCollisions(physics.bodies);
+
+    physics.bodies.forEach((body) => {
+      const damping = Math.pow(0.34, deltaSeconds);
+      body.vx *= damping;
+      body.vy *= damping;
+      body.angularVelocity *= Math.pow(0.2, deltaSeconds);
+    });
+  }
+
+  resolveSmashCollisions(bodies) {
+    for (let pass = 0; pass < 2; pass++) {
+      for (let aIndex = 0; aIndex < bodies.length; aIndex++) {
+        const a = bodies[aIndex];
+
+        for (let bIndex = aIndex + 1; bIndex < bodies.length; bIndex++) {
+          const b = bodies[bIndex];
+          const dx = b.x - a.x;
+          const dy = b.y - a.y;
+          const minDistance = (a.radius + b.radius) * 0.78;
+          const distance = Math.hypot(dx, dy) || 0.001;
+
+          if (distance >= minDistance) {
+            continue;
+          }
+
+          const normalX = dx / distance;
+          const normalY = dy / distance;
+          const overlap = minDistance - distance;
+
+          a.x -= normalX * overlap * 0.5;
+          a.y -= normalY * overlap * 0.5;
+          b.x += normalX * overlap * 0.5;
+          b.y += normalY * overlap * 0.5;
+
+          const relativeVelocityX = b.vx - a.vx;
+          const relativeVelocityY = b.vy - a.vy;
+          const velocityAlongNormal =
+            relativeVelocityX * normalX + relativeVelocityY * normalY;
+
+          if (velocityAlongNormal > 0) {
+            continue;
+          }
+
+          const impulse = -velocityAlongNormal * 0.58;
+          const impulseX = impulse * normalX;
+          const impulseY = impulse * normalY;
+
+          a.vx -= impulseX;
+          a.vy -= impulseY;
+          b.vx += impulseX;
+          b.vy += impulseY;
+          a.angularVelocity -= impulseY * 0.018;
+          b.angularVelocity += impulseY * 0.018;
+        }
+      }
+    }
+  }
+
   drawFrame(now) {
     const ctx = this.context;
 
@@ -1284,6 +1630,12 @@ export default class TextJumbleScreenSaver extends Component {
           jumbleAmount,
           1 - this.heapForcedRestoreProgress(now)
         );
+      }
+    } else if (mode === "smash") {
+      this.updateSmashPhysics(now, width, height, phase);
+
+      if (phase.cycle >= phase.readEnd && phase.cycle < phase.animateOutStart) {
+        jumbleAmount = Math.max(jumbleAmount, 1);
       }
     }
 
@@ -1429,7 +1781,10 @@ export default class TextJumbleScreenSaver extends Component {
         glyphs.length
       );
       const wave =
-        mode === "slot_machine" || mode === "single_out" || mode === "heap"
+        mode === "slot_machine" ||
+        mode === "single_out" ||
+        mode === "heap" ||
+        mode === "smash"
           ? 0
           : Math.sin(now * 0.0017 + glyph.index * 0.37) * 7 * jumbleAmount;
       const x = glyph.x + (target.x - glyph.x) * jumbleAmount + wave;
@@ -2247,6 +2602,17 @@ export default class TextJumbleScreenSaver extends Component {
         y:
           body?.y ??
           -glyph.fontSize * 3 + glyph.lineIndex * glyph.fontSize * 0.58,
+      };
+    }
+
+    if (mode === "smash") {
+      const body = this.smashPhysics?.bodies[glyph.index];
+
+      return {
+        rotation: body?.rotation ?? 0,
+        scale: body?.isProjectile && !this.smashPhysics?.fired ? 0.92 : 0.98,
+        x: body?.x ?? glyph.x,
+        y: body?.y ?? glyph.y,
       };
     }
 
