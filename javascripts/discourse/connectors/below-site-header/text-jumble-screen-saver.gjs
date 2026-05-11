@@ -8,7 +8,8 @@ import TextJumbleScreenSaver from "../../components/text-jumble-screen-saver";
 export default class TextJumbleScreenSaverConnector extends Component {
   static shouldRender() {
     return (
-      settings.text_jumble_enabled && settings.text_jumble_idle_seconds > 0
+      settings.text_jumble_screen_saver_enabled &&
+      settings.text_jumble_idle_seconds > 0
     );
   }
 

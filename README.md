@@ -6,7 +6,7 @@ the letters into geometric, sorting, spiral, and slot-machine-like motion.
 
 ## Settings
 
-- `text_jumble_enabled`
+- `text_jumble_screen_saver_enabled`
 - `text_jumble_idle_seconds`
 - `text_jumble_topic_source`
 - `text_jumble_min_paragraph_length`

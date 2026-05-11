@@ -36,6 +36,7 @@ const MAX_GLYPHS = 1100;
 const TEXT_TRANSITION_MS = 1600;
 const TEXT_TYPE_TRANSITION_MS = 3200;
 const TEXT_TYPE_FADE_OUT_MS = 1000;
+const FONT_FAMILY = "Georgia, serif";
 const VERTEX_SHADER_SOURCE = `
   attribute vec2 a_position;
   attribute vec2 a_tex_coord;
@@ -157,6 +158,7 @@ export default class TextJumbleScreenSaver extends Component {
 
   @tracked isVisible = false;
   @tracked sourceTitle = "";
+  @tracked sourceUrl = "";
 
   animationFrame = null;
   animationModeIndex = -1;
@@ -171,6 +173,7 @@ export default class TextJumbleScreenSaver extends Component {
   outgoingGlyphs = [];
   paragraph = "";
   paragraphTimer = null;
+  pixelRatio = 1;
   renderer = "canvas";
   resizeObserver = null;
   root = null;
@@ -181,22 +184,54 @@ export default class TextJumbleScreenSaver extends Component {
   transitionStartedAt = null;
   webgl = null;
 
+  get isPageMode() {
+    return this.args.displayMode === "page";
+  }
+
+  get sectionClass() {
+    return this.isPageMode
+      ? "text-jumble-screen-saver text-jumble-screen-saver--page"
+      : "text-jumble-screen-saver";
+  }
+
+  get ariaLabel() {
+    return this.isPageMode
+      ? "Text jumble animation"
+      : "Text jumble screensaver";
+  }
+
+  get isTextJumbleRoute() {
+    return this.router.currentRouteName === "text-jumble";
+  }
+
+  get fontWeight() {
+    return this.isPageMode ? 600 : 400;
+  }
+
   @action
   setup(element) {
     this.root = element;
-    this.boundActivity = () => this.handleActivity();
-    this.boundRouteChange = () => this.handleActivity();
-    this.boundVisibilityChange = () => this.handleVisibilityChange();
     this.boundResize = () => this.resize();
 
-    ACTIVITY_EVENTS.forEach((eventName) => {
-      window.addEventListener(eventName, this.boundActivity, { passive: true });
-    });
-    document.addEventListener("visibilitychange", this.boundVisibilityChange);
     window.addEventListener("resize", this.boundResize, { passive: true });
-    this.router.on("routeDidChange", this.boundRouteChange);
 
-    this.scheduleIdle();
+    if (this.isPageMode) {
+      this.show();
+    } else {
+      this.boundActivity = () => this.handleActivity();
+      this.boundRouteChange = () => this.handleRouteChange();
+      this.boundVisibilityChange = () => this.handleVisibilityChange();
+
+      ACTIVITY_EVENTS.forEach((eventName) => {
+        window.addEventListener(eventName, this.boundActivity, {
+          passive: true,
+        });
+      });
+      document.addEventListener("visibilitychange", this.boundVisibilityChange);
+      this.router.on("routeDidChange", this.boundRouteChange);
+
+      this.scheduleIdle();
+    }
   }
 
   @action
@@ -261,15 +296,18 @@ export default class TextJumbleScreenSaver extends Component {
     clearTimeout(this.paragraphTimer);
     this.resizeObserver?.disconnect();
 
-    ACTIVITY_EVENTS.forEach((eventName) => {
-      window.removeEventListener(eventName, this.boundActivity);
-    });
-    document.removeEventListener(
-      "visibilitychange",
-      this.boundVisibilityChange
-    );
     window.removeEventListener("resize", this.boundResize);
-    this.router.off("routeDidChange", this.boundRouteChange);
+
+    if (!this.isPageMode) {
+      ACTIVITY_EVENTS.forEach((eventName) => {
+        window.removeEventListener(eventName, this.boundActivity);
+      });
+      document.removeEventListener(
+        "visibilitychange",
+        this.boundVisibilityChange
+      );
+      this.router.off("routeDidChange", this.boundRouteChange);
+    }
   }
 
   async show() {
@@ -346,6 +384,14 @@ export default class TextJumbleScreenSaver extends Component {
     this.scheduleIdle();
   }
 
+  handleRouteChange() {
+    if (this.isVisible || this.isTextJumbleRoute) {
+      this.hide();
+    }
+
+    this.scheduleIdle();
+  }
+
   handleVisibilityChange() {
     if (document.hidden) {
       this.hide();
@@ -358,7 +404,11 @@ export default class TextJumbleScreenSaver extends Component {
   scheduleIdle() {
     clearTimeout(this.idleTimer);
 
-    if (document.hidden || !settings.text_jumble_enabled) {
+    if (
+      document.hidden ||
+      !settings.text_jumble_screen_saver_enabled ||
+      this.isTextJumbleRoute
+    ) {
       return;
     }
 
@@ -421,9 +471,11 @@ export default class TextJumbleScreenSaver extends Component {
       this.paragraph = paragraph;
       this.lastTopicId = topic.id;
       this.sourceTitle = topicJson.title || topic.title || "";
+      this.sourceUrl = getURL(`/t/${topic.slug}/${topic.id}`);
     } catch {
       this.paragraph = fallbackText;
       this.sourceTitle = "";
+      this.sourceUrl = "";
     }
 
     this.prepareGlyphs({ transition: true });
@@ -449,6 +501,7 @@ export default class TextJumbleScreenSaver extends Component {
       fallbackText;
     this.lastQuoteText = this.paragraph;
     this.sourceTitle = "";
+    this.sourceUrl = "";
   }
 
   resize() {
@@ -460,6 +513,7 @@ export default class TextJumbleScreenSaver extends Component {
 
     const rect = this.stage.getBoundingClientRect();
     const ratio = Math.min(window.devicePixelRatio || 1, 1.75);
+    this.pixelRatio = ratio;
     this.canvas.width = Math.max(Math.floor(rect.width * ratio), 1);
     this.canvas.height = Math.max(Math.floor(rect.height * ratio), 1);
     this.canvas.style.width = `${rect.width}px`;
@@ -481,14 +535,15 @@ export default class TextJumbleScreenSaver extends Component {
     const ctx = this.context;
     const width = this.canvas.width;
     const height = this.canvas.height;
-    const fontSize = clamp(Math.round(width / 54), 18, 34);
+    const fontSize =
+      clamp(Math.round(width / this.pixelRatio / 54), 18, 34) * this.pixelRatio;
     const lineHeight = Math.round(fontSize * 1.45);
     const maxTextWidth = width * 0.72;
     const words = this.paragraph.split(/\s+/).filter(Boolean);
     const lines = [];
     let line = "";
 
-    ctx.font = `${fontSize}px Georgia, serif`;
+    ctx.font = `${this.fontWeight} ${fontSize}px ${FONT_FAMILY}`;
 
     for (const word of words) {
       const nextLine = line ? `${line} ${word}` : word;
@@ -543,6 +598,7 @@ export default class TextJumbleScreenSaver extends Component {
             ),
             colorPaletteMode,
             fontSize,
+            fontWeight: this.fontWeight,
             index: glyphs.length,
             lineIndex,
             width: charWidth,
@@ -761,13 +817,18 @@ export default class TextJumbleScreenSaver extends Component {
         background.rgb[0] / 255,
         background.rgb[1] / 255,
         background.rgb[2] / 255,
-        background.alpha
+        this.isPageMode ? 0 : background.alpha
       );
       gl.clear(gl.COLOR_BUFFER_BIT);
       return;
     }
 
     ctx.clearRect(0, 0, width, height);
+
+    if (this.isPageMode) {
+      return;
+    }
+
     ctx.fillStyle = this.canvasWashColor();
     ctx.fillRect(0, 0, width, height);
   }
@@ -835,7 +896,7 @@ export default class TextJumbleScreenSaver extends Component {
         ctx.translate(x, y);
         ctx.rotate(rotation);
         ctx.scale(scale, scale);
-        ctx.font = `${glyph.fontSize}px Georgia, serif`;
+        ctx.font = `${glyph.fontWeight} ${glyph.fontSize}px ${FONT_FAMILY}`;
         ctx.textAlign = "center";
         ctx.textBaseline = "middle";
         ctx.globalAlpha =
@@ -859,9 +920,13 @@ export default class TextJumbleScreenSaver extends Component {
   }
 
   glyphSprite(glyph, fillColor, strokeColor) {
-    const cacheKey = [glyph.char, glyph.fontSize, fillColor, strokeColor].join(
-      "|"
-    );
+    const cacheKey = [
+      glyph.char,
+      glyph.fontSize,
+      glyph.fontWeight,
+      fillColor,
+      strokeColor,
+    ].join("|");
     let sprite = this.glyphSpriteCache.get(cacheKey);
 
     if (!sprite) {
@@ -883,13 +948,17 @@ export default class TextJumbleScreenSaver extends Component {
     canvas.height = height;
 
     ctx.translate(width / 2, height / 2);
-    ctx.font = `${glyph.fontSize}px Georgia, serif`;
+    ctx.font = `${glyph.fontWeight} ${glyph.fontSize}px ${FONT_FAMILY}`;
     ctx.textAlign = "center";
     ctx.textBaseline = "middle";
     ctx.lineWidth = Math.max(glyph.fontSize * 0.08, 1.4);
     ctx.strokeStyle = strokeColor;
     ctx.fillStyle = fillColor;
-    ctx.strokeText(glyph.char, 0, 0);
+
+    if (strokeColor) {
+      ctx.strokeText(glyph.char, 0, 0);
+    }
+
     ctx.fillText(glyph.char, 0, 0);
 
     return { canvas, height, width };
@@ -1197,7 +1266,7 @@ export default class TextJumbleScreenSaver extends Component {
     return {
       spectrum: {
         fills: spectrumFills,
-        stroke: rgbString(secondary, 0.76),
+        stroke: this.isPageMode ? null : rgbString(secondary, 0.76),
       },
       structured: {
         fills: [
@@ -1205,7 +1274,7 @@ export default class TextJumbleScreenSaver extends Component {
           rgbString(tertiary, 0.94),
           rgbString(quaternary, 0.94),
         ],
-        stroke: rgbString(secondary, 0.76),
+        stroke: this.isPageMode ? null : rgbString(secondary, 0.76),
       },
     };
   }
@@ -1424,8 +1493,8 @@ export default class TextJumbleScreenSaver extends Component {
     >
       {{#if this.isVisible}}
         <section
-          class="text-jumble-screen-saver"
-          aria-label="Text jumble screensaver"
+          class={{this.sectionClass}}
+          aria-label={{this.ariaLabel}}
           {{didInsert this.setupStage}}
           {{willDestroy this.teardownStage}}
         >
@@ -1436,7 +1505,11 @@ export default class TextJumbleScreenSaver extends Component {
 
           {{#if this.sourceTitle}}
             <div class="text-jumble-screen-saver__source">
-              {{this.sourceTitle}}
+              {{#if this.sourceUrl}}
+                <a href={{this.sourceUrl}}>{{this.sourceTitle}}</a>
+              {{else}}
+                {{this.sourceTitle}}
+              {{/if}}
             </div>
           {{/if}}
         </section>

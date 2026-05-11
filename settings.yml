@@ -1,4 +1,7 @@
-text_jumble_enabled:
+text_jumble_screen_saver_enabled:
+  default: true
+
+text_jumble_route_enabled:
   default: true
 
 text_jumble_idle_seconds:

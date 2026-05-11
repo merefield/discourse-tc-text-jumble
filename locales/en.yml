@@ -2,7 +2,8 @@ en:
   theme_metadata:
     description: "Idle screensaver that turns paragraphs from public topics into animated geometric text."
     settings:
-      text_jumble_enabled: "Enable the text jumble idle screensaver."
+      text_jumble_screen_saver_enabled: "Enable the text jumble idle screensaver."
+      text_jumble_route_enabled: "Add a Text Jumble page and sidebar link."
       text_jumble_idle_seconds: "Seconds of inactivity before the screensaver appears."
       text_jumble_text_source: "Choose whether the screensaver uses editable quotes or random topic paragraphs."
       text_jumble_topic_source: "Topic list used when choosing a random paragraph."
