@@ -36,7 +36,7 @@ const MAX_GLYPHS = 1100;
 const TEXT_TRANSITION_MS = 1600;
 const TEXT_TYPE_TRANSITION_MS = 3200;
 const TEXT_TYPE_FADE_OUT_MS = 1000;
-const HEAP_FORCE_RESTORE_AFTER_LAST_FALL_MS = 10000;
+const HEAP_FORCE_RESTORE_AFTER_LAST_FALL_MS = 6500;
 const HEAP_FORCED_RESTORE_MS = ANIMATION_MS * ANIMATION_RETURN_RATIO;
 const FONT_FAMILY = "Georgia, serif";
 const VERTEX_SHADER_SOURCE = `
@@ -894,21 +894,21 @@ export default class TextJumbleScreenSaver extends Component {
 
     const bodies = this.glyphs.map((glyph) => {
       const radius = Math.max(glyph.fontSize * 0.34, 6);
-      const dropX = clamp(
-        width * 0.54 +
-          (seededUnit(glyph.index + 131) - 0.5) * glyph.fontSize * 0.42,
+      const topX = clamp(glyph.x, radius, width - radius);
+      const topY = Math.max(
         radius,
-        width - radius
+        glyph.fontSize * (0.9 + glyph.lineIndex * 0.72)
       );
 
       return {
         angularVelocity: 0,
-        dropX,
         grounded: false,
         radius,
         rotation: -0.08,
         settledFrames: 0,
         state: "queued",
+        topX,
+        topY,
         vx: 0,
         vy: 0,
         x: glyph.x,
@@ -922,10 +922,8 @@ export default class TextJumbleScreenSaver extends Component {
       glyphCount: this.glyphs.length,
       height,
       lastNow: null,
-      lastLetterFellAt: null,
-      releaseAccumulator: 0,
-      releaseComplete: false,
-      releaseIndex: 0,
+      lastLetterReachedPileAt: null,
+      allDropped: false,
       width,
     };
   }
@@ -948,91 +946,50 @@ export default class TextJumbleScreenSaver extends Component {
     );
     const firstGlyph = this.glyphs[0];
     const fontSize = firstGlyph?.fontSize || 20;
-    const tankFillDuration = 0.1;
-    const tankProgress = clamp(streamProgress / tankFillDuration, 0, 1);
-    const releaseDurationSeconds =
-      (Math.max(phase.animateOutStart - phase.readEnd, 0.01) / 1000) *
-      (1 - tankFillDuration);
-    const releaseIntervalSeconds = clamp(
-      releaseDurationSeconds / Math.max(physics.bodies.length, 1),
-      0.08,
-      0.18
-    );
-    const tankCursor = tankProgress * (physics.bodies.length + 2) - 1;
-    const tankLeft = fontSize * 0.8;
-    const tankTop = fontSize * 0.7;
-    const tankWidth = Math.min(width * 0.24, fontSize * 9);
-    const tankHeight = Math.min(height * 0.2, fontSize * 6);
-    const tankRight = tankLeft + tankWidth;
-    const tankBottom = tankTop + tankHeight;
-    const tankOutletX = tankLeft + tankWidth * 0.55;
-    const beltY = height * 0.22;
+    const liftProgress = smoothstep(0, 1, clamp(streamProgress / 0.12, 0, 1));
+    const dropStarted = streamProgress >= 0.135;
     const gravity = height * 1.65;
     const floorY = height - Math.max(fontSize, 20) * 0.8;
+    const chuteTopY = height * 0.24;
+    const chuteBottomY = height * 0.56;
+    const chuteGap = Math.max(fontSize * 2.8, width * 0.09);
+    const leftChuteStartX = width * 0.12;
+    const leftChuteEndX = width / 2 - chuteGap / 2;
+    const rightChuteStartX = width * 0.88;
+    const rightChuteEndX = width / 2 + chuteGap / 2;
 
     physics.bodies.forEach((body, index) => {
       const glyph = this.glyphs[index];
       body.grounded = false;
 
-      if (body.state === "queued" && tankCursor >= index) {
-        const tankTargetX =
-          tankLeft + tankWidth * (0.24 + seededUnit(index + 251) * 0.58);
-        const tankTargetY =
-          tankTop + tankHeight * (0.2 + seededUnit(index + 257) * 0.35);
+      if (body.state === "queued") {
+        body.x = glyph.x + (body.topX - glyph.x) * liftProgress;
+        body.y = glyph.y + (body.topY - glyph.y) * liftProgress;
 
-        body.state = "thrown";
-        body.vx = (tankTargetX - body.x) / 0.12;
-        body.vy = (tankTargetY - body.y) / 0.12;
-        body.angularVelocity = (seededUnit(index + 277) - 0.5) * 7;
+        if (dropStarted) {
+          body.state = "falling";
+          body.vx = (seededUnit(index + 197) - 0.5) * glyph.fontSize * 0.18;
+          body.vy = glyph.fontSize * (0.12 + seededUnit(index + 211) * 0.18);
+          body.angularVelocity = (seededUnit(index + 223) - 0.5) * 1.1;
+        } else {
+          return;
+        }
       }
 
-      if (body.state === "conveyor") {
-        const direction = Math.sign(body.dropX - body.x) || 1;
-        body.x += body.vx * deltaSeconds;
-        body.y = beltY + glyph.lineIndex * glyph.fontSize * 0.05;
-
-        if ((body.dropX - body.x) * direction <= 0) {
-          body.state = "falling";
-          body.x = body.dropX;
-          body.vx = (seededUnit(index + 197) - 0.5) * glyph.fontSize * 0.58;
-          body.vy = glyph.fontSize * (0.2 + seededUnit(index + 211) * 0.25);
-          body.angularVelocity = (seededUnit(index + 223) - 0.5) * 2.2;
-
-          if (index === physics.bodies.length - 1) {
-            physics.lastLetterFellAt = now;
-          }
-        }
-      } else if (body.state === "thrown" || body.state === "tank") {
-        body.vy += gravity * deltaSeconds * 0.55;
-        body.x += body.vx * deltaSeconds;
-        body.y += body.vy * deltaSeconds;
-        body.rotation += body.angularVelocity * deltaSeconds;
-
-        if (body.x < tankLeft + body.radius) {
-          body.x = tankLeft + body.radius;
-          body.vx = Math.abs(body.vx) * 0.36;
-          body.angularVelocity *= -0.52;
-        } else if (body.x > tankRight - body.radius) {
-          body.x = tankRight - body.radius;
-          body.vx = -Math.abs(body.vx) * 0.36;
-          body.angularVelocity *= -0.52;
-        }
-
-        if (body.y < tankTop + body.radius) {
-          body.y = tankTop + body.radius;
-          body.vy = Math.abs(body.vy) * 0.28;
-        } else if (body.y > tankBottom - body.radius) {
-          body.y = tankBottom - body.radius;
-          body.vy = -Math.abs(body.vy) * 0.24;
-          body.vx *= 0.7;
-          body.angularVelocity *= 0.82;
-          body.state = "tank";
-        }
-      } else if (body.state !== "queued" && body.state !== "settled") {
+      if (body.state !== "settled") {
         body.vy += gravity * deltaSeconds;
         body.x += body.vx * deltaSeconds;
         body.y += body.vy * deltaSeconds;
         body.rotation += body.angularVelocity * deltaSeconds;
+
+        this.applyHeapChuteCollision(body, {
+          chuteBottomY,
+          chuteTopY,
+          leftChuteEndX,
+          leftChuteStartX,
+          rightChuteEndX,
+          rightChuteStartX,
+        });
 
         if (body.x < body.radius) {
           body.x = body.radius;
@@ -1067,76 +1024,21 @@ export default class TextJumbleScreenSaver extends Component {
       }
     });
 
-    if (tankProgress >= 1) {
-      physics.bodies.forEach((body) => {
-        if (body.state !== "thrown") {
-          return;
-        }
-
-        body.state = "tank";
-        body.x = clamp(body.x, tankLeft + body.radius, tankRight - body.radius);
-        body.y = clamp(body.y, tankTop + body.radius, tankBottom - body.radius);
-        body.vx *= 0.28;
-        body.vy *= 0.2;
-        body.angularVelocity *= 0.6;
-      });
-    }
-
-    const tankLoaded = physics.bodies.every(
-      (body) => body.state !== "queued" && body.state !== "thrown"
-    );
-
     physics.bodies.forEach((body) => {
-      if (
-        body.state !== "queued" &&
-        body.state !== "conveyor" &&
-        body.y >= floorY - body.radius - 0.5
-      ) {
+      if (body.state !== "queued" && body.y >= floorY - body.radius - 0.5) {
         body.grounded = true;
         body.vx *= 0.04;
       }
     });
 
-    if (tankLoaded && !physics.releaseComplete) {
-      physics.releaseAccumulator += deltaSeconds;
-
-      if (
-        physics.releaseIndex === 0 ||
-        physics.releaseAccumulator >= releaseIntervalSeconds
-      ) {
-        const body = physics.bodies[physics.releaseIndex];
-        const glyph = this.glyphs[physics.releaseIndex];
-
-        if (body?.state === "tank") {
-          physics.releaseAccumulator = 0;
-          body.state = "conveyor";
-          body.x = tankOutletX;
-          body.y = tankBottom + glyph.fontSize * 0.24;
-          body.vx = (body.dropX - tankOutletX) / 0.78;
-          body.vy = 0;
-          body.angularVelocity *= 0.25;
-          physics.releaseIndex++;
-        }
-      }
-
-      physics.releaseComplete = physics.releaseIndex >= physics.bodies.length;
-    }
+    physics.allDropped = physics.bodies.every(
+      (body) => body.state !== "queued"
+    );
 
     this.resolveHeapCollisions(physics.bodies);
 
     physics.bodies.forEach((body) => {
-      if (
-        body.state === "queued" ||
-        body.state === "conveyor" ||
-        body.state === "settled"
-      ) {
-        return;
-      }
-
-      if (body.state === "thrown" || body.state === "tank") {
-        body.vx *= 0.988;
-        body.vy *= 0.99;
-        body.angularVelocity *= 0.982;
+      if (body.state === "queued" || body.state === "settled") {
         return;
       }
 
@@ -1174,17 +1076,26 @@ export default class TextJumbleScreenSaver extends Component {
         Math.abs(body.angularVelocity) < 0.12
       );
     }).length;
+    const allReachedPile = physics.bodies.every(
+      (body) =>
+        body.state !== "queued" && body.y >= chuteBottomY + body.radius * 0.5
+    );
+
+    if (allReachedPile && !physics.lastLetterReachedPileAt) {
+      physics.lastLetterReachedPileAt = now;
+    }
 
     if (
-      physics.lastLetterFellAt &&
+      physics.lastLetterReachedPileAt &&
       !physics.forcedRestoreStartedAt &&
-      now - physics.lastLetterFellAt >= HEAP_FORCE_RESTORE_AFTER_LAST_FALL_MS
+      now - physics.lastLetterReachedPileAt >=
+        HEAP_FORCE_RESTORE_AFTER_LAST_FALL_MS
     ) {
       physics.forcedRestoreStartedAt = now;
     }
 
     const settledEnough =
-      physics.releaseComplete && doneCount / physics.bodies.length >= 0.9;
+      allReachedPile && doneCount / physics.bodies.length >= 0.9;
     const forcedRestoreComplete = this.heapForcedRestoreProgress(now) >= 1;
 
     physics.allSettled =
@@ -1205,10 +1116,54 @@ export default class TextJumbleScreenSaver extends Component {
     return smoothstep(0, HEAP_FORCED_RESTORE_MS, now - startedAt);
   }
 
+  applyHeapChuteCollision(body, chute) {
+    const gapLeft = chute.leftChuteEndX;
+    const gapRight = chute.rightChuteEndX;
+
+    if (
+      body.y < chute.chuteTopY - body.radius ||
+      body.y > chute.chuteBottomY + body.radius ||
+      (body.x > gapLeft && body.x < gapRight)
+    ) {
+      return;
+    }
+
+    const isLeft = body.x <= gapLeft;
+    const startX = isLeft ? chute.leftChuteStartX : chute.rightChuteStartX;
+    const endX = isLeft ? chute.leftChuteEndX : chute.rightChuteEndX;
+    const minX = Math.min(startX, endX);
+    const maxX = Math.max(startX, endX);
+
+    if (body.x < minX || body.x > maxX) {
+      return;
+    }
+
+    const xSpan = endX - startX || (isLeft ? 1 : -1);
+    const slope = (chute.chuteBottomY - chute.chuteTopY) / xSpan;
+    const lineY = chute.chuteTopY + (body.x - startX) * slope;
+
+    if (body.y + body.radius < lineY || body.vy < 0) {
+      return;
+    }
+
+    body.y = lineY - body.radius;
+
+    const tangentX = isLeft ? 1 : -1;
+    const tangentY = Math.abs(slope);
+    const tangentLength = Math.hypot(tangentX, tangentY) || 1;
+    const unitTangentX = tangentX / tangentLength;
+    const unitTangentY = tangentY / tangentLength;
+    const slideVelocity =
+      body.vx * unitTangentX + body.vy * unitTangentY + body.radius * 2.1;
+
+    body.vx = unitTangentX * slideVelocity * 0.72;
+    body.vy = unitTangentY * slideVelocity * 0.72;
+    body.angularVelocity = (body.angularVelocity + unitTangentX * 0.35) * 0.88;
+    body.settledFrames = 0;
+  }
+
   resolveHeapCollisions(bodies) {
-    const activeBodies = bodies.filter(
-      (body) => body.state !== "queued" && body.state !== "conveyor"
-    );
+    const activeBodies = bodies.filter((body) => body.state !== "queued");
 
     for (let pass = 0; pass < 2; pass++) {
       for (let aIndex = 0; aIndex < activeBodies.length; aIndex++) {
