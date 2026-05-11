@@ -18,6 +18,7 @@ export const TEXT_JUMBLE_ANIMATION_MODES = [
   { id: "single_out", labelKey: "text_jumble.animation_styles.single_out" },
   { id: "heap", labelKey: "text_jumble.animation_styles.heap" },
   { id: "smash", labelKey: "text_jumble.animation_styles.smash" },
+  { id: "pile", labelKey: "text_jumble.animation_styles.pile" },
 ];
 export const TEXT_JUMBLE_ANIMATION_MODE_IDS = TEXT_JUMBLE_ANIMATION_MODES.map(
   (mode) => mode.id

@@ -13,6 +13,7 @@ en:
       single_out: "Single out"
       heap: "Heap"
       smash: "Smash"
+      pile: "Pile"
     preferences:
       title: "Text Jumble"
       disable_screen_saver: "Disable the Text Jumble screen saver on this browser"

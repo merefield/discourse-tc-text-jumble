@@ -781,6 +781,7 @@ export default class TextJumbleScreenSaver extends Component {
       );
     });
     sorted.forEach((glyph, rank) => (glyph.sortedRank = rank));
+    this.preparePileMetadata(glyphs, width, height, fontSize);
 
     if (transition) {
       if (this.glyphs.length) {
@@ -863,6 +864,82 @@ export default class TextJumbleScreenSaver extends Component {
         glyph.wordCenterOffset = glyph.x - wordCenterX;
         glyph.wordHalfWidth = (right - left) / 2;
         glyph.wordLength = wordGlyphs.length;
+      });
+    });
+  }
+
+  pileKeyForGlyph(glyph) {
+    const normalized = glyph.char.toLocaleLowerCase();
+
+    return /^[a-z0-9]$/i.test(normalized) ? normalized : "symbols";
+  }
+
+  pileSeedForKey(key) {
+    return [...key].reduce(
+      (seed, char, index) => seed + char.charCodeAt(0) * (index + 1),
+      0
+    );
+  }
+
+  preparePileMetadata(glyphs, width, height, fontSize) {
+    const groups = new Map();
+
+    glyphs.forEach((glyph) => {
+      const key = this.pileKeyForGlyph(glyph);
+      const group = groups.get(key) || [];
+
+      group.push(glyph);
+      groups.set(key, group);
+    });
+
+    const groupEntries = [...groups.entries()].sort((a, b) => {
+      const seedA = this.pileSeedForKey(a[0]);
+      const seedB = this.pileSeedForKey(b[0]);
+
+      return (
+        seededUnit(seedA + glyphs.length) - seededUnit(seedB + glyphs.length)
+      );
+    });
+    const columnCount = Math.max(
+      2,
+      Math.ceil(Math.sqrt(groupEntries.length * (width / Math.max(height, 1))))
+    );
+    const rowCount = Math.max(1, Math.ceil(groupEntries.length / columnCount));
+    const left = width * 0.12;
+    const top = height * 0.16;
+    const usableWidth = width * 0.76;
+    const usableHeight = height * 0.68;
+
+    groupEntries.forEach(([key, group], groupIndex) => {
+      const seed = this.pileSeedForKey(key) + glyphs.length * 17;
+      const column = groupIndex % columnCount;
+      const row = Math.floor(groupIndex / columnCount);
+      const cellWidth = usableWidth / Math.max(columnCount, 1);
+      const cellHeight = usableHeight / Math.max(rowCount, 1);
+      const centerX =
+        left +
+        cellWidth * (column + 0.5) +
+        (seededUnit(seed + 3) - 0.5) * cellWidth * 0.46;
+      const centerY =
+        top +
+        cellHeight * (row + 0.5) +
+        (seededUnit(seed + 7) - 0.5) * cellHeight * 0.46;
+
+      group.forEach((glyph, rank) => {
+        const angle = rank * 2.399963 + seededUnit(seed + 11) * Math.PI * 2;
+        const radius = fontSize * 0.18 * Math.sqrt(rank);
+
+        glyph.pileX = clamp(
+          centerX + Math.cos(angle) * radius,
+          fontSize,
+          width - fontSize
+        );
+        glyph.pileY = clamp(
+          centerY + Math.sin(angle) * radius,
+          fontSize,
+          height - fontSize
+        );
+        glyph.pileRotation = (seededUnit(seed + rank * 19) - 0.5) * 0.46;
       });
     });
   }
@@ -1784,7 +1861,8 @@ export default class TextJumbleScreenSaver extends Component {
         mode === "slot_machine" ||
         mode === "single_out" ||
         mode === "heap" ||
-        mode === "smash"
+        mode === "smash" ||
+        mode === "pile"
           ? 0
           : Math.sin(now * 0.0017 + glyph.index * 0.37) * 7 * jumbleAmount;
       const x = glyph.x + (target.x - glyph.x) * jumbleAmount + wave;
@@ -2613,6 +2691,15 @@ export default class TextJumbleScreenSaver extends Component {
         scale: body?.isProjectile && !this.smashPhysics?.fired ? 0.92 : 0.98,
         x: body?.x ?? glyph.x,
         y: body?.y ?? glyph.y,
+      };
+    }
+
+    if (mode === "pile") {
+      return {
+        rotation: glyph.pileRotation || 0,
+        scale: 0.94,
+        x: glyph.pileX || glyph.x,
+        y: glyph.pileY || glyph.y,
       };
     }
 
