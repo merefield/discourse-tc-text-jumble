@@ -8,6 +8,7 @@ the letters into geometric, sorting, spiral, and slot-machine-like motion.
 
 - `text_jumble_screen_saver_enabled`
 - `text_jumble_idle_seconds`
+- `text_jumble_screen_saver_background_opacity`
 - `text_jumble_topic_source`
 - `text_jumble_min_paragraph_length`
 - `text_jumble_cycle_seconds`

@@ -5,6 +5,7 @@ en:
       text_jumble_screen_saver_enabled: "Enable the text jumble idle screensaver."
       text_jumble_route_enabled: "Add a Text Jumble page and sidebar link."
       text_jumble_idle_seconds: "Seconds of inactivity before the screensaver appears."
+      text_jumble_screen_saver_background_opacity: "Opacity percentage for the screensaver background wash."
       text_jumble_text_source: "Choose whether the screensaver uses editable quotes or random topic paragraphs."
       text_jumble_topic_source: "Topic list used when choosing a random paragraph."
       text_jumble_min_paragraph_length: "Minimum paragraph length to use from a topic."

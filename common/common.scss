@@ -3,40 +3,26 @@
 }
 
 .text-jumble-page {
-  width: 100%;
+  width: 100vw;
   min-height: calc(100dvh - var(--header-offset, 0px));
+  margin-left: calc(50% - 50vw);
 }
 
 .text-jumble-screen-saver {
   --text-jumble-screen-saver-top: var(--header-offset, 0px);
   --text-jumble-background-rgb: var(--secondary-rgb);
-  --text-jumble-filter-rgb: var(--primary-rgb);
-  --text-jumble-filter-opacity-start: 0.12;
-  --text-jumble-filter-opacity-end: 0.18;
+  --text-jumble-background-opacity: 0.32;
   position: fixed;
   inset: var(--text-jumble-screen-saver-top) 0 0 0;
   z-index: z("header") - 1;
   width: 100vw;
   height: calc(100dvh - var(--text-jumble-screen-saver-top));
   overflow: hidden;
-  background:
-    radial-gradient(
-      circle at 32% 26%,
-      rgb(var(--tertiary-rgb), 0.06),
-      transparent 28rem
-    ),
-    radial-gradient(
-      circle at 72% 68%,
-      rgb(var(--quaternary-rgb), 0.05),
-      transparent 24rem
-    ),
-    linear-gradient(
-      135deg,
-      rgb(var(--text-jumble-background-rgb), 1),
-      rgb(var(--text-jumble-background-rgb), 0.98) 54%,
-      rgb(var(--text-jumble-background-rgb), 1)
-    );
-  backdrop-filter: blur(12px) saturate(0.72);
+  background: rgb(
+    var(--text-jumble-background-rgb),
+    var(--text-jumble-background-opacity)
+  );
+  backdrop-filter: blur(12px);
   opacity: 0;
   pointer-events: auto;
   animation: text-jumble-screen-saver-fade-in 420ms ease-out forwards;
@@ -44,24 +30,16 @@
 
 .text-jumble-screen-saver--page {
   position: relative;
-  inset: auto;
+  inset: auto 0 0 0;
   z-index: 0;
-  width: 100%;
+  width: 100vw;
   height: calc(100dvh - var(--header-offset, 0px));
-  min-height: 34rem;
   background: transparent;
   backdrop-filter: none;
 }
 
 .text-jumble-screen-saver::before {
-  content: "";
-  position: absolute;
-  inset: 0;
-  z-index: 0;
-  background: linear-gradient(
-    rgb(var(--text-jumble-filter-rgb), var(--text-jumble-filter-opacity-start)),
-    rgb(var(--text-jumble-filter-rgb), var(--text-jumble-filter-opacity-end))
-  );
+  display: none;
 }
 
 .text-jumble-screen-saver--page::before {

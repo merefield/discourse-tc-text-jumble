@@ -105,17 +105,6 @@ function mixRgb(from, to, amount) {
   );
 }
 
-function relativeLuminance(rgb) {
-  const [red, green, blue] = rgb.map((channel) => {
-    const normalized = channel / 255;
-    return normalized <= 0.03928
-      ? normalized / 12.92
-      : ((normalized + 0.055) / 1.055) ** 2.4;
-  });
-
-  return red * 0.2126 + green * 0.7152 + blue * 0.0722;
-}
-
 function rgbString(rgb, alpha) {
   return `rgba(${rgb.join(", ")}, ${alpha})`;
 }
@@ -202,10 +191,6 @@ export default class TextJumbleScreenSaver extends Component {
 
   get isTextJumbleRoute() {
     return this.router.currentRouteName === "text-jumble";
-  }
-
-  get fontWeight() {
-    return this.isPageMode ? 600 : 400;
   }
 
   @action
@@ -543,7 +528,7 @@ export default class TextJumbleScreenSaver extends Component {
     const lines = [];
     let line = "";
 
-    ctx.font = `${this.fontWeight} ${fontSize}px ${FONT_FAMILY}`;
+    ctx.font = `400 ${fontSize}px ${FONT_FAMILY}`;
 
     for (const word of words) {
       const nextLine = line ? `${line} ${word}` : word;
@@ -598,7 +583,6 @@ export default class TextJumbleScreenSaver extends Component {
             ),
             colorPaletteMode,
             fontSize,
-            fontWeight: this.fontWeight,
             index: glyphs.length,
             lineIndex,
             width: charWidth,
@@ -896,7 +880,7 @@ export default class TextJumbleScreenSaver extends Component {
         ctx.translate(x, y);
         ctx.rotate(rotation);
         ctx.scale(scale, scale);
-        ctx.font = `${glyph.fontWeight} ${glyph.fontSize}px ${FONT_FAMILY}`;
+        ctx.font = `400 ${glyph.fontSize}px ${FONT_FAMILY}`;
         ctx.textAlign = "center";
         ctx.textBaseline = "middle";
         ctx.globalAlpha =
@@ -920,13 +904,9 @@ export default class TextJumbleScreenSaver extends Component {
   }
 
   glyphSprite(glyph, fillColor, strokeColor) {
-    const cacheKey = [
-      glyph.char,
-      glyph.fontSize,
-      glyph.fontWeight,
-      fillColor,
-      strokeColor,
-    ].join("|");
+    const cacheKey = [glyph.char, glyph.fontSize, fillColor, strokeColor].join(
+      "|"
+    );
     let sprite = this.glyphSpriteCache.get(cacheKey);
 
     if (!sprite) {
@@ -948,7 +928,7 @@ export default class TextJumbleScreenSaver extends Component {
     canvas.height = height;
 
     ctx.translate(width / 2, height / 2);
-    ctx.font = `${glyph.fontWeight} ${glyph.fontSize}px ${FONT_FAMILY}`;
+    ctx.font = `400 ${glyph.fontSize}px ${FONT_FAMILY}`;
     ctx.textAlign = "center";
     ctx.textBaseline = "middle";
     ctx.lineWidth = Math.max(glyph.fontSize * 0.08, 1.4);
@@ -1173,9 +1153,18 @@ export default class TextJumbleScreenSaver extends Component {
       .trim();
 
     return {
-      alpha: 0.24,
+      alpha: this.screenSaverBackgroundAlpha(),
       rgb: parseRgb(stageRgb, [8, 11, 16]),
     };
+  }
+
+  screenSaverBackgroundAlpha() {
+    const configuredOpacity =
+      Number(settings.text_jumble_screen_saver_background_opacity) / 100;
+
+    return Number.isFinite(configuredOpacity)
+      ? clamp(configuredOpacity, 0, 1)
+      : 0.32;
   }
 
   applyBackgroundPalette() {
@@ -1184,35 +1173,15 @@ export default class TextJumbleScreenSaver extends Component {
     }
 
     const style = getComputedStyle(document.documentElement);
-    const secondary = this.currentPageBackgroundRgb(style);
-    const primary = parseRgb(
-      style.getPropertyValue("--primary-rgb"),
-      [235, 238, 242]
-    );
-    const isLightBackground = relativeLuminance(secondary) > 0.5;
-    const shiftedBackground = mixRgb(
-      secondary,
-      isLightBackground ? [0, 0, 0] : [255, 255, 255],
-      isLightBackground ? 0.06 : 0.08
-    );
-    const filter = mixRgb(
-      primary,
-      isLightBackground ? [0, 0, 0] : [255, 255, 255],
-      0.06
-    );
+    const background = this.currentPageBackgroundRgb(style);
 
     this.stage.style.setProperty(
       "--text-jumble-background-rgb",
-      shiftedBackground.join(", ")
-    );
-    this.stage.style.setProperty("--text-jumble-filter-rgb", filter.join(", "));
-    this.stage.style.setProperty(
-      "--text-jumble-filter-opacity-start",
-      isLightBackground ? "0.12" : "0.1"
+      background.join(", ")
     );
     this.stage.style.setProperty(
-      "--text-jumble-filter-opacity-end",
-      isLightBackground ? "0.2" : "0.16"
+      "--text-jumble-background-opacity",
+      this.screenSaverBackgroundAlpha()
     );
   }
 
@@ -1266,7 +1235,7 @@ export default class TextJumbleScreenSaver extends Component {
     return {
       spectrum: {
         fills: spectrumFills,
-        stroke: this.isPageMode ? null : rgbString(secondary, 0.76),
+        stroke: rgbString(secondary, 0.76),
       },
       structured: {
         fills: [
@@ -1274,7 +1243,7 @@ export default class TextJumbleScreenSaver extends Component {
           rgbString(tertiary, 0.94),
           rgbString(quaternary, 0.94),
         ],
-        stroke: this.isPageMode ? null : rgbString(secondary, 0.76),
+        stroke: rgbString(secondary, 0.76),
       },
     };
   }
