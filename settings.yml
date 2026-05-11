@@ -48,7 +48,7 @@ text_jumble_disable_on_low_power:
   default: true
 
 text_jumble_default_animation_styles:
-  default: "grid|spiral|sorting|wave|orbit|columns|dominos|slot_machine|single_out"
+  default: "grid|spiral|sorting|wave|orbit|columns|dominos|slot_machine|single_out|heap"
   type: list
   list_type: compact
 

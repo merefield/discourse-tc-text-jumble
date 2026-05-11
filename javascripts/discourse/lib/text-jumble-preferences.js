@@ -16,6 +16,7 @@ export const TEXT_JUMBLE_ANIMATION_MODES = [
     labelKey: "text_jumble.animation_styles.slot_machine",
   },
   { id: "single_out", labelKey: "text_jumble.animation_styles.single_out" },
+  { id: "heap", labelKey: "text_jumble.animation_styles.heap" },
 ];
 export const TEXT_JUMBLE_ANIMATION_MODE_IDS = TEXT_JUMBLE_ANIMATION_MODES.map(
   (mode) => mode.id

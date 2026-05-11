@@ -159,6 +159,7 @@ export default class TextJumbleScreenSaver extends Component {
   context = null;
   glyphs = [];
   glyphSpriteCache = new Map();
+  heapPhysics = null;
   idleTimer = null;
   animationMenuElement = null;
   lastQuoteText = null;
@@ -544,6 +545,11 @@ export default class TextJumbleScreenSaver extends Component {
     }
 
     this.paragraphTimer = setTimeout(async () => {
+      if (this.currentMode() === "heap" && !this.heapMostlySettled()) {
+        this.scheduleNextParagraph();
+        return;
+      }
+
       await this.loadParagraph();
       this.scheduleNextParagraph();
     }, this.msUntilNextParagraph());
@@ -792,6 +798,7 @@ export default class TextJumbleScreenSaver extends Component {
     }
 
     this.glyphs = glyphs;
+    this.heapPhysics = null;
     this.startedAt = performance.now();
   }
 
@@ -874,6 +881,365 @@ export default class TextJumbleScreenSaver extends Component {
     this.animationFrame = null;
   }
 
+  ensureHeapPhysics(width, height) {
+    if (
+      this.heapPhysics?.glyphCount === this.glyphs.length &&
+      this.heapPhysics?.width === width &&
+      this.heapPhysics?.height === height
+    ) {
+      return;
+    }
+
+    const bodies = this.glyphs.map((glyph) => {
+      const radius = Math.max(glyph.fontSize * 0.34, 6);
+      const dropX = clamp(
+        width * 0.54 +
+          (seededUnit(glyph.index + 131) - 0.5) * glyph.fontSize * 0.42,
+        radius,
+        width - radius
+      );
+
+      return {
+        angularVelocity: 0,
+        dropX,
+        radius,
+        rotation: -0.08,
+        settledFrames: 0,
+        state: "queued",
+        vx: 0,
+        vy: 0,
+        x: glyph.x,
+        y: glyph.y,
+      };
+    });
+
+    this.heapPhysics = {
+      bodies,
+      glyphCount: this.glyphs.length,
+      height,
+      lastNow: null,
+      releaseAccumulator: 0,
+      releaseComplete: false,
+      releaseIndex: 0,
+      width,
+    };
+  }
+
+  updateHeapPhysics(now, width, height, phase) {
+    this.ensureHeapPhysics(width, height);
+
+    const physics = this.heapPhysics;
+    const deltaSeconds = Math.min(
+      physics.lastNow ? (now - physics.lastNow) / 1000 : 1 / 60,
+      1 / 30
+    );
+    physics.lastNow = now;
+
+    const streamProgress = clamp(
+      (phase.cycle - phase.readEnd) /
+        Math.max(phase.animateOutStart - phase.readEnd, 0.01),
+      0,
+      1
+    );
+    const firstGlyph = this.glyphs[0];
+    const fontSize = firstGlyph?.fontSize || 20;
+    const tankFillDuration = 0.1;
+    const tankProgress = clamp(streamProgress / tankFillDuration, 0, 1);
+    const releaseDurationSeconds =
+      (Math.max(phase.animateOutStart - phase.readEnd, 0.01) / 1000) *
+      (1 - tankFillDuration);
+    const releaseIntervalSeconds = clamp(
+      releaseDurationSeconds / Math.max(physics.bodies.length, 1),
+      0.08,
+      0.18
+    );
+    const tankCursor = tankProgress * (physics.bodies.length + 2) - 1;
+    const tankLeft = fontSize * 0.8;
+    const tankTop = fontSize * 0.7;
+    const tankWidth = Math.min(width * 0.24, fontSize * 9);
+    const tankHeight = Math.min(height * 0.2, fontSize * 6);
+    const tankRight = tankLeft + tankWidth;
+    const tankBottom = tankTop + tankHeight;
+    const tankOutletX = tankLeft + tankWidth * 0.55;
+    const beltY = height * 0.22;
+    const gravity = height * 1.65;
+    const floorY = height - Math.max(fontSize, 20) * 0.8;
+
+    physics.bodies.forEach((body, index) => {
+      const glyph = this.glyphs[index];
+
+      if (body.state === "queued" && tankCursor >= index) {
+        const tankTargetX =
+          tankLeft + tankWidth * (0.24 + seededUnit(index + 251) * 0.58);
+        const tankTargetY =
+          tankTop + tankHeight * (0.2 + seededUnit(index + 257) * 0.35);
+
+        body.state = "thrown";
+        body.vx = (tankTargetX - body.x) / 0.12;
+        body.vy = (tankTargetY - body.y) / 0.12;
+        body.angularVelocity = (seededUnit(index + 277) - 0.5) * 7;
+      }
+
+      if (body.state === "conveyor") {
+        const direction = Math.sign(body.dropX - body.x) || 1;
+        body.x += body.vx * deltaSeconds;
+        body.y = beltY + glyph.lineIndex * glyph.fontSize * 0.05;
+
+        if ((body.dropX - body.x) * direction <= 0) {
+          body.state = "falling";
+          body.x = body.dropX;
+          body.vx = (seededUnit(index + 197) - 0.5) * glyph.fontSize * 0.58;
+          body.vy = glyph.fontSize * (0.2 + seededUnit(index + 211) * 0.25);
+          body.angularVelocity = (seededUnit(index + 223) - 0.5) * 2.2;
+        }
+      } else if (body.state === "thrown" || body.state === "tank") {
+        body.vy += gravity * deltaSeconds * 0.55;
+        body.x += body.vx * deltaSeconds;
+        body.y += body.vy * deltaSeconds;
+        body.rotation += body.angularVelocity * deltaSeconds;
+
+        if (body.x < tankLeft + body.radius) {
+          body.x = tankLeft + body.radius;
+          body.vx = Math.abs(body.vx) * 0.36;
+          body.angularVelocity *= -0.52;
+        } else if (body.x > tankRight - body.radius) {
+          body.x = tankRight - body.radius;
+          body.vx = -Math.abs(body.vx) * 0.36;
+          body.angularVelocity *= -0.52;
+        }
+
+        if (body.y < tankTop + body.radius) {
+          body.y = tankTop + body.radius;
+          body.vy = Math.abs(body.vy) * 0.28;
+        } else if (body.y > tankBottom - body.radius) {
+          body.y = tankBottom - body.radius;
+          body.vy = -Math.abs(body.vy) * 0.24;
+          body.vx *= 0.7;
+          body.angularVelocity *= 0.82;
+          body.state = "tank";
+        }
+      } else if (body.state !== "queued" && body.state !== "settled") {
+        body.vy += gravity * deltaSeconds;
+        body.x += body.vx * deltaSeconds;
+        body.y += body.vy * deltaSeconds;
+        body.rotation += body.angularVelocity * deltaSeconds;
+
+        if (body.x < body.radius) {
+          body.x = body.radius;
+          body.vx = Math.abs(body.vx) * 0.28;
+          body.vy *= 0.92;
+          body.angularVelocity *= -0.32;
+        } else if (body.x > width - body.radius) {
+          body.x = width - body.radius;
+          body.vx = -Math.abs(body.vx) * 0.28;
+          body.vy *= 0.92;
+          body.angularVelocity *= -0.32;
+        }
+
+        if (body.y > floorY - body.radius) {
+          const impactVelocity = Math.abs(body.vy);
+
+          body.y = floorY - body.radius;
+          body.vy =
+            impactVelocity < glyph.fontSize * 1.2 ? 0 : -impactVelocity * 0.14;
+          body.vx *= 0.18;
+          if (Math.abs(body.vx) < glyph.fontSize * 0.08) {
+            body.vx = 0;
+          }
+          body.angularVelocity += body.vx * 0.012;
+          body.angularVelocity *= 0.42;
+
+          if (
+            Math.abs(body.vx) < glyph.fontSize * 0.22 &&
+            Math.abs(body.vy) < glyph.fontSize * 0.18
+          ) {
+            body.settledFrames += 4;
+          }
+        }
+      }
+    });
+
+    if (tankProgress >= 1) {
+      physics.bodies.forEach((body) => {
+        if (body.state !== "thrown") {
+          return;
+        }
+
+        body.state = "tank";
+        body.x = clamp(body.x, tankLeft + body.radius, tankRight - body.radius);
+        body.y = clamp(body.y, tankTop + body.radius, tankBottom - body.radius);
+        body.vx *= 0.28;
+        body.vy *= 0.2;
+        body.angularVelocity *= 0.6;
+      });
+    }
+
+    const tankLoaded = physics.bodies.every(
+      (body) => body.state !== "queued" && body.state !== "thrown"
+    );
+
+    if (tankLoaded && !physics.releaseComplete) {
+      physics.releaseAccumulator += deltaSeconds;
+
+      if (
+        physics.releaseIndex === 0 ||
+        physics.releaseAccumulator >= releaseIntervalSeconds
+      ) {
+        const body = physics.bodies[physics.releaseIndex];
+        const glyph = this.glyphs[physics.releaseIndex];
+
+        if (body?.state === "tank") {
+          physics.releaseAccumulator = 0;
+          body.state = "conveyor";
+          body.x = tankOutletX;
+          body.y = tankBottom + glyph.fontSize * 0.24;
+          body.vx = (body.dropX - tankOutletX) / 0.78;
+          body.vy = 0;
+          body.angularVelocity *= 0.25;
+          physics.releaseIndex++;
+        }
+      }
+
+      physics.releaseComplete = physics.releaseIndex >= physics.bodies.length;
+    }
+
+    this.resolveHeapCollisions(physics.bodies);
+
+    physics.bodies.forEach((body) => {
+      if (
+        body.state === "queued" ||
+        body.state === "conveyor" ||
+        body.state === "settled"
+      ) {
+        return;
+      }
+
+      if (body.state === "thrown" || body.state === "tank") {
+        body.vx *= 0.988;
+        body.vy *= 0.99;
+        body.angularVelocity *= 0.982;
+        return;
+      }
+
+      body.vx *= 0.986;
+      body.vy *= 0.992;
+      body.angularVelocity *= 0.972;
+
+      if (
+        Math.abs(body.vx) < 6 &&
+        Math.abs(body.vy) < 8 &&
+        Math.abs(body.angularVelocity) < 0.08
+      ) {
+        body.settledFrames++;
+      } else {
+        body.settledFrames = 0;
+      }
+
+      if (body.settledFrames > 12) {
+        body.vx = 0;
+        body.vy = 0;
+        body.angularVelocity = 0;
+        body.state = "settled";
+      }
+    });
+
+    const doneCount = physics.bodies.filter((body) => {
+      if (body.state === "settled") {
+        return true;
+      }
+
+      return (
+        body.state === "falling" &&
+        Math.abs(body.vx) < 10 &&
+        Math.abs(body.vy) < 12 &&
+        Math.abs(body.angularVelocity) < 0.12
+      );
+    }).length;
+
+    physics.allSettled =
+      physics.bodies.length > 0 &&
+      physics.releaseComplete &&
+      doneCount / physics.bodies.length >= 0.9;
+  }
+
+  heapMostlySettled() {
+    return this.heapPhysics?.allSettled;
+  }
+
+  resolveHeapCollisions(bodies) {
+    const activeBodies = bodies.filter(
+      (body) => body.state !== "queued" && body.state !== "conveyor"
+    );
+
+    for (let pass = 0; pass < 2; pass++) {
+      for (let aIndex = 0; aIndex < activeBodies.length; aIndex++) {
+        const a = activeBodies[aIndex];
+
+        for (let bIndex = aIndex + 1; bIndex < activeBodies.length; bIndex++) {
+          const b = activeBodies[bIndex];
+          const dx = b.x - a.x;
+          const dy = b.y - a.y;
+          const minDistance = (a.radius + b.radius) * 0.82;
+          const distance = Math.hypot(dx, dy) || 0.001;
+
+          if (distance >= minDistance) {
+            continue;
+          }
+
+          const normalX = dx / distance;
+          const normalY = dy / distance;
+          const overlap = minDistance - distance;
+          const aMass = a.radius;
+          const bMass = b.radius;
+          const totalMass = aMass + bMass;
+
+          a.x -= normalX * overlap * (bMass / totalMass);
+          a.y -= normalY * overlap * (bMass / totalMass);
+          b.x += normalX * overlap * (aMass / totalMass);
+          b.y += normalY * overlap * (aMass / totalMass);
+
+          const relativeVelocityX = b.vx - a.vx;
+          const relativeVelocityY = b.vy - a.vy;
+          const velocityAlongNormal =
+            relativeVelocityX * normalX + relativeVelocityY * normalY;
+
+          if (velocityAlongNormal > 0) {
+            continue;
+          }
+
+          const impulse = (-(1 + 0.24) * velocityAlongNormal) / totalMass;
+          const impulseX = impulse * normalX;
+          const impulseY = impulse * normalY;
+
+          a.vx -= impulseX * bMass;
+          a.vy -= impulseY * bMass;
+          b.vx += impulseX * aMass;
+          b.vy += impulseY * aMass;
+          a.angularVelocity -= impulseX * 0.018;
+          b.angularVelocity += impulseX * 0.018;
+          if (
+            a.state === "settled" &&
+            (Math.abs(a.vx) > 3 ||
+              Math.abs(a.vy) > 4 ||
+              Math.abs(a.angularVelocity) > 0.05)
+          ) {
+            a.state = "falling";
+          }
+          if (
+            b.state === "settled" &&
+            (Math.abs(b.vx) > 3 ||
+              Math.abs(b.vy) > 4 ||
+              Math.abs(b.angularVelocity) > 0.05)
+          ) {
+            b.state = "falling";
+          }
+          a.settledFrames = 0;
+          b.settledFrames = 0;
+        }
+      }
+    }
+  }
+
   drawFrame(now) {
     const ctx = this.context;
 
@@ -886,12 +1252,20 @@ export default class TextJumbleScreenSaver extends Component {
     const elapsed = now - this.startedAt;
     const phase = this.animationPhase(elapsed);
     const mode = this.currentMode();
-    const jumbleAmount = mode
+    let jumbleAmount = mode
       ? smoothstep(phase.readEnd, phase.animateInEnd, phase.cycle) *
         (1 - smoothstep(phase.animateOutStart, phase.animateEnd, phase.cycle))
       : 0;
 
     this.clearRenderer(ctx, width, height);
+
+    if (mode === "heap") {
+      this.updateHeapPhysics(now, width, height, phase);
+
+      if (!this.heapMostlySettled() && phase.cycle >= phase.readEnd) {
+        jumbleAmount = Math.max(jumbleAmount, 1);
+      }
+    }
 
     const palettes = this.activeTextPalettes();
     let incomingAlpha = 1;
@@ -1035,7 +1409,7 @@ export default class TextJumbleScreenSaver extends Component {
         glyphs.length
       );
       const wave =
-        mode === "slot_machine" || mode === "single_out"
+        mode === "slot_machine" || mode === "single_out" || mode === "heap"
           ? 0
           : Math.sin(now * 0.0017 + glyph.index * 0.37) * 7 * jumbleAmount;
       const x = glyph.x + (target.x - glyph.x) * jumbleAmount + wave;
@@ -1356,6 +1730,10 @@ export default class TextJumbleScreenSaver extends Component {
     const elapsed = now - this.startedAt;
     const phase = this.animationPhase(elapsed);
 
+    if (this.currentMode() === "heap" && !this.heapMostlySettled()) {
+      return Math.max(Math.ceil(phase.cycleMs - phase.cycleElapsed), 500);
+    }
+
     return Math.max(Math.ceil(phase.cycleMs - phase.cycleElapsed), 0);
   }
 
@@ -1477,6 +1855,80 @@ export default class TextJumbleScreenSaver extends Component {
         stroke: rgbString(secondary, 0.76),
       },
     };
+  }
+
+  heapPositionForGlyph(glyph, glyphCount, width, height) {
+    const levelCount = Math.max(4, Math.ceil(Math.sqrt(glyphCount) * 0.8));
+    let heapIndex = glyph.index;
+    let level = 0;
+    let levelCapacity = levelCount * 2 + 1;
+
+    while (heapIndex >= levelCapacity && level < levelCount - 1) {
+      heapIndex -= levelCapacity;
+      level++;
+      levelCapacity = Math.max(1, (levelCount - level) * 2 + 1);
+    }
+
+    const spread = glyph.fontSize * 0.5;
+    const jitterX =
+      (seededUnit(glyph.index + 83) - 0.5) * glyph.fontSize * 0.22;
+    const jitterY =
+      (seededUnit(glyph.index + 97) - 0.5) * glyph.fontSize * 0.18;
+
+    return {
+      rotation: (seededUnit(glyph.index + 109) - 0.5) * 0.72,
+      x: width / 2 + (heapIndex - (levelCapacity - 1) / 2) * spread + jitterX,
+      y: height - glyph.fontSize * (0.85 + level * 0.46) + jitterY,
+    };
+  }
+
+  heapImpactOffsetForGlyph(glyph, streamCursor, glyphCount, width, height) {
+    const base = this.heapPositionForGlyph(glyph, glyphCount, width, height);
+    const latestImpactIndex = Math.floor(streamCursor - 2.45);
+    const firstImpactIndex = Math.max(glyph.index + 1, latestImpactIndex - 5);
+    const offset = { rotation: 0, x: 0, y: 0 };
+
+    for (
+      let impactIndex = firstImpactIndex;
+      impactIndex <= latestImpactIndex;
+      impactIndex++
+    ) {
+      if (impactIndex < 0 || impactIndex >= glyphCount) {
+        continue;
+      }
+
+      const impactGlyph = { ...glyph, index: impactIndex };
+      const impact = this.heapPositionForGlyph(
+        impactGlyph,
+        glyphCount,
+        width,
+        height
+      );
+      const age = streamCursor - (impactIndex + 2.45);
+      const distance = Math.abs(base.x - impact.x);
+      const range = glyph.fontSize * 3.8;
+
+      if (age < 0 || age > 2.2 || distance > range) {
+        continue;
+      }
+
+      const direction =
+        base.x === impact.x
+          ? seededUnit(glyph.index + 151) < 0.5
+            ? -1
+            : 1
+          : Math.sign(base.x - impact.x);
+      const force =
+        (1 - distance / range) *
+        Math.sin(age * Math.PI * 2.2) *
+        Math.exp(-age * 1.25);
+
+      offset.x += direction * glyph.fontSize * 0.34 * force;
+      offset.y -= Math.abs(force) * glyph.fontSize * 0.46;
+      offset.rotation += direction * force * 0.42;
+    }
+
+    return offset;
   }
 
   targetForGlyph(
@@ -1760,6 +2212,21 @@ export default class TextJumbleScreenSaver extends Component {
         scale: 0.86,
         x: wordCenterX + glyph.wordCenterOffset * 0.88 + orbit,
         y: padding + wordY,
+      };
+    }
+
+    if (mode === "heap") {
+      const body = this.heapPhysics?.bodies[glyph.index];
+
+      return {
+        rotation: body?.rotation ?? -0.08,
+        scale: body?.state === "queued" ? 0.92 : 0.98,
+        x:
+          body?.x ??
+          -glyph.fontSize * 2 - glyph.columnIndex * glyph.fontSize * 0.16,
+        y:
+          body?.y ??
+          -glyph.fontSize * 3 + glyph.lineIndex * glyph.fontSize * 0.58,
       };
     }
 
