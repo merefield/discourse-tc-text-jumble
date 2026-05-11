@@ -36,6 +36,8 @@ const MAX_GLYPHS = 1100;
 const TEXT_TRANSITION_MS = 1600;
 const TEXT_TYPE_TRANSITION_MS = 3200;
 const TEXT_TYPE_FADE_OUT_MS = 1000;
+const HEAP_FORCE_RESTORE_AFTER_LAST_FALL_MS = 10000;
+const HEAP_FORCED_RESTORE_MS = ANIMATION_MS * ANIMATION_RETURN_RATIO;
 const FONT_FAMILY = "Georgia, serif";
 const VERTEX_SHADER_SOURCE = `
   attribute vec2 a_position;
@@ -902,6 +904,7 @@ export default class TextJumbleScreenSaver extends Component {
       return {
         angularVelocity: 0,
         dropX,
+        grounded: false,
         radius,
         rotation: -0.08,
         settledFrames: 0,
@@ -915,9 +918,11 @@ export default class TextJumbleScreenSaver extends Component {
 
     this.heapPhysics = {
       bodies,
+      forcedRestoreStartedAt: null,
       glyphCount: this.glyphs.length,
       height,
       lastNow: null,
+      lastLetterFellAt: null,
       releaseAccumulator: 0,
       releaseComplete: false,
       releaseIndex: 0,
@@ -967,6 +972,7 @@ export default class TextJumbleScreenSaver extends Component {
 
     physics.bodies.forEach((body, index) => {
       const glyph = this.glyphs[index];
+      body.grounded = false;
 
       if (body.state === "queued" && tankCursor >= index) {
         const tankTargetX =
@@ -991,6 +997,10 @@ export default class TextJumbleScreenSaver extends Component {
           body.vx = (seededUnit(index + 197) - 0.5) * glyph.fontSize * 0.58;
           body.vy = glyph.fontSize * (0.2 + seededUnit(index + 211) * 0.25);
           body.angularVelocity = (seededUnit(index + 223) - 0.5) * 2.2;
+
+          if (index === physics.bodies.length - 1) {
+            physics.lastLetterFellAt = now;
+          }
         }
       } else if (body.state === "thrown" || body.state === "tank") {
         body.vy += gravity * deltaSeconds * 0.55;
@@ -1042,12 +1052,10 @@ export default class TextJumbleScreenSaver extends Component {
           body.y = floorY - body.radius;
           body.vy =
             impactVelocity < glyph.fontSize * 1.2 ? 0 : -impactVelocity * 0.14;
-          body.vx *= 0.18;
-          if (Math.abs(body.vx) < glyph.fontSize * 0.08) {
-            body.vx = 0;
-          }
+          body.grounded = true;
+          body.vx = 0;
           body.angularVelocity += body.vx * 0.012;
-          body.angularVelocity *= 0.42;
+          body.angularVelocity *= 0.02;
 
           if (
             Math.abs(body.vx) < glyph.fontSize * 0.22 &&
@@ -1077,6 +1085,17 @@ export default class TextJumbleScreenSaver extends Component {
     const tankLoaded = physics.bodies.every(
       (body) => body.state !== "queued" && body.state !== "thrown"
     );
+
+    physics.bodies.forEach((body) => {
+      if (
+        body.state !== "queued" &&
+        body.state !== "conveyor" &&
+        body.y >= floorY - body.radius - 0.5
+      ) {
+        body.grounded = true;
+        body.vx *= 0.04;
+      }
+    });
 
     if (tankLoaded && !physics.releaseComplete) {
       physics.releaseAccumulator += deltaSeconds;
@@ -1156,14 +1175,34 @@ export default class TextJumbleScreenSaver extends Component {
       );
     }).length;
 
+    if (
+      physics.lastLetterFellAt &&
+      !physics.forcedRestoreStartedAt &&
+      now - physics.lastLetterFellAt >= HEAP_FORCE_RESTORE_AFTER_LAST_FALL_MS
+    ) {
+      physics.forcedRestoreStartedAt = now;
+    }
+
+    const settledEnough =
+      physics.releaseComplete && doneCount / physics.bodies.length >= 0.9;
+    const forcedRestoreComplete = this.heapForcedRestoreProgress(now) >= 1;
+
     physics.allSettled =
-      physics.bodies.length > 0 &&
-      physics.releaseComplete &&
-      doneCount / physics.bodies.length >= 0.9;
+      physics.bodies.length > 0 && (settledEnough || forcedRestoreComplete);
   }
 
   heapMostlySettled() {
     return this.heapPhysics?.allSettled;
+  }
+
+  heapForcedRestoreProgress(now) {
+    const startedAt = this.heapPhysics?.forcedRestoreStartedAt;
+
+    if (!startedAt) {
+      return 0;
+    }
+
+    return smoothstep(0, HEAP_FORCED_RESTORE_MS, now - startedAt);
   }
 
   resolveHeapCollisions(bodies) {
@@ -1192,10 +1231,12 @@ export default class TextJumbleScreenSaver extends Component {
           const aMass = a.radius;
           const bMass = b.radius;
           const totalMass = aMass + bMass;
+          const aMoveShare = a.grounded ? 0.018 : bMass / totalMass;
+          const bMoveShare = b.grounded ? 0.018 : aMass / totalMass;
 
-          a.x -= normalX * overlap * (bMass / totalMass);
+          a.x -= normalX * overlap * aMoveShare;
           a.y -= normalY * overlap * (bMass / totalMass);
-          b.x += normalX * overlap * (aMass / totalMass);
+          b.x += normalX * overlap * bMoveShare;
           b.y += normalY * overlap * (aMass / totalMass);
 
           const relativeVelocityX = b.vx - a.vx;
@@ -1207,7 +1248,7 @@ export default class TextJumbleScreenSaver extends Component {
             continue;
           }
 
-          const impulse = (-(1 + 0.24) * velocityAlongNormal) / totalMass;
+          const impulse = (-velocityAlongNormal * 0.98) / totalMass;
           const impulseX = impulse * normalX;
           const impulseY = impulse * normalY;
 
@@ -1215,8 +1256,29 @@ export default class TextJumbleScreenSaver extends Component {
           a.vy -= impulseY * bMass;
           b.vx += impulseX * aMass;
           b.vy += impulseY * aMass;
-          a.angularVelocity -= impulseX * 0.018;
-          b.angularVelocity += impulseX * 0.018;
+
+          const tangentX = -normalY;
+          const tangentY = normalX;
+          const tangentVelocity =
+            relativeVelocityX * tangentX + relativeVelocityY * tangentY;
+          const frictionImpulse = (-tangentVelocity * 0.86) / totalMass;
+          const frictionImpulseX = frictionImpulse * tangentX;
+          const frictionImpulseY = frictionImpulse * tangentY;
+
+          a.vx -= frictionImpulseX * bMass;
+          a.vy -= frictionImpulseY * bMass;
+          b.vx += frictionImpulseX * aMass;
+          b.vy += frictionImpulseY * aMass;
+
+          if (a.grounded) {
+            a.vx *= 0.08;
+          }
+          if (b.grounded) {
+            b.vx *= 0.08;
+          }
+
+          a.angularVelocity = (a.angularVelocity - impulseX * 0.01) * 0.5;
+          b.angularVelocity = (b.angularVelocity + impulseX * 0.01) * 0.5;
           if (
             a.state === "settled" &&
             (Math.abs(a.vx) > 3 ||
@@ -1263,7 +1325,10 @@ export default class TextJumbleScreenSaver extends Component {
       this.updateHeapPhysics(now, width, height, phase);
 
       if (!this.heapMostlySettled() && phase.cycle >= phase.readEnd) {
-        jumbleAmount = Math.max(jumbleAmount, 1);
+        jumbleAmount = Math.max(
+          jumbleAmount,
+          1 - this.heapForcedRestoreProgress(now)
+        );
       }
     }
 
