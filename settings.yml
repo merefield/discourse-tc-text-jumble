@@ -29,11 +29,15 @@ text_jumble_after_animation_read_seconds:
   default: 8
 
 text_jumble_renderer:
-  default: "canvas"
+  default: "auto"
   type: enum
   choices:
+    - auto
     - canvas
     - webgl
+
+text_jumble_disable_on_low_power:
+  default: true
 
 text_jumble_animation_mode:
   default: "mixed"

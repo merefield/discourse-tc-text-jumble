@@ -171,6 +171,7 @@ export default class TextJumbleScreenSaver extends Component {
   outgoingGlyphs = [];
   paragraph = "";
   paragraphTimer = null;
+  renderer = "canvas";
   resizeObserver = null;
   root = null;
   slotMachineSeed = 0;
@@ -211,8 +212,14 @@ export default class TextJumbleScreenSaver extends Component {
   setupCanvas(element) {
     this.canvas = element;
     this.webgl = null;
+    this.renderer = this.chooseRenderer();
 
-    if (settings.text_jumble_renderer === "webgl") {
+    if (this.renderer === "disabled") {
+      this.context = null;
+      return;
+    }
+
+    if (this.renderer === "webgl") {
       const gl = element.getContext("webgl", {
         alpha: true,
         antialias: true,
@@ -222,6 +229,10 @@ export default class TextJumbleScreenSaver extends Component {
       if (gl) {
         this.webgl = this.setupWebgl(gl);
       }
+    }
+
+    if (this.renderer === "webgl" && !this.webgl) {
+      this.renderer = "canvas";
     }
 
     this.context = this.webgl
@@ -275,6 +286,56 @@ export default class TextJumbleScreenSaver extends Component {
     this.isVisible = false;
     clearTimeout(this.paragraphTimer);
     this.stopAnimation();
+  }
+
+  chooseRenderer() {
+    const configured = settings.text_jumble_renderer;
+
+    if (settings.text_jumble_disable_on_low_power && this.isLowPowerDevice()) {
+      return "disabled";
+    }
+
+    if (configured === "canvas") {
+      return "canvas";
+    }
+
+    if (configured === "webgl") {
+      return this.canUseWebgl() ? "webgl" : "canvas";
+    }
+
+    return this.canUseWebgl() ? "webgl" : "canvas";
+  }
+
+  isLowPowerDevice() {
+    if (window.matchMedia?.("(prefers-reduced-motion: reduce)").matches) {
+      return true;
+    }
+
+    if (navigator.deviceMemory && navigator.deviceMemory <= 2) {
+      return true;
+    }
+
+    if (navigator.hardwareConcurrency && navigator.hardwareConcurrency <= 2) {
+      return true;
+    }
+
+    return false;
+  }
+
+  canUseWebgl() {
+    const canvas = document.createElement("canvas");
+    const gl = canvas.getContext("webgl", {
+      alpha: true,
+      antialias: false,
+      failIfMajorPerformanceCaveat: true,
+      premultipliedAlpha: false,
+    });
+
+    if (!gl) {
+      return false;
+    }
+
+    return gl.getParameter(gl.MAX_TEXTURE_SIZE) >= 2048;
   }
 
   handleActivity() {
