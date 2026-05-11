@@ -28,6 +28,13 @@ text_jumble_read_seconds:
 text_jumble_after_animation_read_seconds:
   default: 8
 
+text_jumble_renderer:
+  default: "canvas"
+  type: enum
+  choices:
+    - canvas
+    - webgl
+
 text_jumble_animation_mode:
   default: "mixed"
   type: enum

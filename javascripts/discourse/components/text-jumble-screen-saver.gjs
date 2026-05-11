@@ -36,6 +36,32 @@ const MAX_GLYPHS = 1100;
 const TEXT_TRANSITION_MS = 1600;
 const TEXT_TYPE_TRANSITION_MS = 3200;
 const TEXT_TYPE_FADE_OUT_MS = 1000;
+const VERTEX_SHADER_SOURCE = `
+  attribute vec2 a_position;
+  attribute vec2 a_tex_coord;
+  uniform vec2 u_resolution;
+  varying vec2 v_tex_coord;
+
+  void main() {
+    vec2 zero_to_one = a_position / u_resolution;
+    vec2 clip_space = zero_to_one * 2.0 - 1.0;
+
+    gl_Position = vec4(clip_space * vec2(1.0, -1.0), 0.0, 1.0);
+    v_tex_coord = a_tex_coord;
+  }
+`;
+const FRAGMENT_SHADER_SOURCE = `
+  precision mediump float;
+
+  uniform sampler2D u_texture;
+  uniform float u_alpha;
+  varying vec2 v_tex_coord;
+
+  void main() {
+    vec4 color = texture2D(u_texture, v_tex_coord);
+    gl_FragColor = vec4(color.rgb, color.a * u_alpha);
+  }
+`;
 
 function clamp(value, min, max) {
   return Math.min(Math.max(value, min), max);
@@ -152,6 +178,7 @@ export default class TextJumbleScreenSaver extends Component {
   startedAt = 0;
   transitionMode = "crossfade";
   transitionStartedAt = null;
+  webgl = null;
 
   @action
   setup(element) {
@@ -183,7 +210,23 @@ export default class TextJumbleScreenSaver extends Component {
   @action
   setupCanvas(element) {
     this.canvas = element;
-    this.context = element.getContext("2d", { alpha: true });
+    this.webgl = null;
+
+    if (settings.text_jumble_renderer === "webgl") {
+      const gl = element.getContext("webgl", {
+        alpha: true,
+        antialias: true,
+        premultipliedAlpha: false,
+      });
+
+      if (gl) {
+        this.webgl = this.setupWebgl(gl);
+      }
+    }
+
+    this.context = this.webgl
+      ? document.createElement("canvas").getContext("2d")
+      : element.getContext("2d", { alpha: true });
     this.startedAt = performance.now();
     this.resize();
     this.startAnimation();
@@ -197,6 +240,7 @@ export default class TextJumbleScreenSaver extends Component {
     this.stage = null;
     this.canvas = null;
     this.context = null;
+    this.webgl = null;
   }
 
   @action
@@ -564,9 +608,7 @@ export default class TextJumbleScreenSaver extends Component {
       smoothstep(phase.readEnd, phase.animateInEnd, phase.cycle) *
       (1 - smoothstep(phase.animateOutStart, phase.animateEnd, phase.cycle));
 
-    ctx.clearRect(0, 0, width, height);
-    ctx.fillStyle = this.canvasWashColor();
-    ctx.fillRect(0, 0, width, height);
+    this.clearRenderer(ctx, width, height);
 
     const palettes = this.activeTextPalettes();
     let incomingAlpha = 1;
@@ -648,6 +690,27 @@ export default class TextJumbleScreenSaver extends Component {
     );
   }
 
+  clearRenderer(ctx, width, height) {
+    if (this.webgl) {
+      const gl = this.webgl.context;
+      const background = this.canvasWashRgb();
+
+      gl.viewport(0, 0, width, height);
+      gl.clearColor(
+        background.rgb[0] / 255,
+        background.rgb[1] / 255,
+        background.rgb[2] / 255,
+        background.alpha
+      );
+      gl.clear(gl.COLOR_BUFFER_BIT);
+      return;
+    }
+
+    ctx.clearRect(0, 0, width, height);
+    ctx.fillStyle = this.canvasWashColor();
+    ctx.fillRect(0, 0, width, height);
+  }
+
   drawGlyphs(
     ctx,
     glyphs,
@@ -695,21 +758,46 @@ export default class TextJumbleScreenSaver extends Component {
       const colorIndex = glyph.colorIndex % palette.fills.length;
       const fillColor = palette.fills[colorIndex];
 
-      ctx.save();
-      ctx.translate(x, y);
-      ctx.rotate(rotation);
-      ctx.scale(scale, scale);
-      ctx.font = `${glyph.fontSize}px Georgia, serif`;
-      ctx.textAlign = "center";
-      ctx.textBaseline = "middle";
-      ctx.globalAlpha =
-        alpha * smoothstep(0, 1, glyphReveal) * (0.94 + jumbleAmount * 0.06);
-      this.drawGlyphSprite(ctx, glyph, fillColor, palette.stroke);
-      ctx.restore();
+      if (this.webgl) {
+        this.drawGlyphSpriteWebgl(
+          glyph,
+          fillColor,
+          palette.stroke,
+          x,
+          y,
+          rotation,
+          scale,
+          alpha * smoothstep(0, 1, glyphReveal) * (0.94 + jumbleAmount * 0.06)
+        );
+      } else {
+        ctx.save();
+        ctx.translate(x, y);
+        ctx.rotate(rotation);
+        ctx.scale(scale, scale);
+        ctx.font = `${glyph.fontSize}px Georgia, serif`;
+        ctx.textAlign = "center";
+        ctx.textBaseline = "middle";
+        ctx.globalAlpha =
+          alpha * smoothstep(0, 1, glyphReveal) * (0.94 + jumbleAmount * 0.06);
+        this.drawGlyphSprite(ctx, glyph, fillColor, palette.stroke);
+        ctx.restore();
+      }
     }
   }
 
   drawGlyphSprite(ctx, glyph, fillColor, strokeColor) {
+    const sprite = this.glyphSprite(glyph, fillColor, strokeColor);
+
+    ctx.drawImage(
+      sprite.canvas,
+      -sprite.width / 2,
+      -sprite.height / 2,
+      sprite.width,
+      sprite.height
+    );
+  }
+
+  glyphSprite(glyph, fillColor, strokeColor) {
     const cacheKey = [glyph.char, glyph.fontSize, fillColor, strokeColor].join(
       "|"
     );
@@ -720,13 +808,7 @@ export default class TextJumbleScreenSaver extends Component {
       this.glyphSpriteCache.set(cacheKey, sprite);
     }
 
-    ctx.drawImage(
-      sprite.canvas,
-      -sprite.width / 2,
-      -sprite.height / 2,
-      sprite.width,
-      sprite.height
-    );
+    return sprite;
   }
 
   buildGlyphSprite(glyph, fillColor, strokeColor) {
@@ -750,6 +832,147 @@ export default class TextJumbleScreenSaver extends Component {
     ctx.fillText(glyph.char, 0, 0);
 
     return { canvas, height, width };
+  }
+
+  drawGlyphSpriteWebgl(
+    glyph,
+    fillColor,
+    strokeColor,
+    x,
+    y,
+    rotation,
+    scale,
+    alpha
+  ) {
+    const sprite = this.glyphSprite(glyph, fillColor, strokeColor);
+    const glState = this.webgl;
+
+    if (!glState || alpha <= 0) {
+      return;
+    }
+
+    const gl = glState.context;
+    const texture = this.textureForSprite(sprite);
+    const halfWidth = (sprite.width * scale) / 2;
+    const halfHeight = (sprite.height * scale) / 2;
+    const cos = Math.cos(rotation);
+    const sin = Math.sin(rotation);
+    const corners = [
+      [-halfWidth, -halfHeight, 0, 0],
+      [halfWidth, -halfHeight, 1, 0],
+      [-halfWidth, halfHeight, 0, 1],
+      [-halfWidth, halfHeight, 0, 1],
+      [halfWidth, -halfHeight, 1, 0],
+      [halfWidth, halfHeight, 1, 1],
+    ];
+    const vertices = new Float32Array(corners.length * 4);
+
+    corners.forEach((corner, index) => {
+      const [localX, localY, u, v] = corner;
+      const offset = index * 4;
+
+      vertices[offset] = x + localX * cos - localY * sin;
+      vertices[offset + 1] = y + localX * sin + localY * cos;
+      vertices[offset + 2] = u;
+      vertices[offset + 3] = v;
+    });
+
+    gl.useProgram(glState.program);
+    gl.bindBuffer(gl.ARRAY_BUFFER, glState.buffer);
+    gl.bufferData(gl.ARRAY_BUFFER, vertices, gl.DYNAMIC_DRAW);
+    gl.enableVertexAttribArray(glState.positionLocation);
+    gl.vertexAttribPointer(glState.positionLocation, 2, gl.FLOAT, false, 16, 0);
+    gl.enableVertexAttribArray(glState.texCoordLocation);
+    gl.vertexAttribPointer(glState.texCoordLocation, 2, gl.FLOAT, false, 16, 8);
+    gl.uniform2f(
+      glState.resolutionLocation,
+      this.canvas.width,
+      this.canvas.height
+    );
+    gl.uniform1f(glState.alphaLocation, alpha);
+    gl.activeTexture(gl.TEXTURE0);
+    gl.bindTexture(gl.TEXTURE_2D, texture);
+    gl.uniform1i(glState.textureLocation, 0);
+    gl.drawArrays(gl.TRIANGLES, 0, 6);
+  }
+
+  textureForSprite(sprite) {
+    const gl = this.webgl.context;
+    sprite.textures ||= new WeakMap();
+
+    if (sprite.textures.has(gl)) {
+      return sprite.textures.get(gl);
+    }
+
+    const texture = gl.createTexture();
+
+    gl.bindTexture(gl.TEXTURE_2D, texture);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+    gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, false);
+    gl.texImage2D(
+      gl.TEXTURE_2D,
+      0,
+      gl.RGBA,
+      gl.RGBA,
+      gl.UNSIGNED_BYTE,
+      sprite.canvas
+    );
+    sprite.textures.set(gl, texture);
+
+    return texture;
+  }
+
+  setupWebgl(gl) {
+    const vertexShader = this.compileShader(
+      gl,
+      gl.VERTEX_SHADER,
+      VERTEX_SHADER_SOURCE
+    );
+    const fragmentShader = this.compileShader(
+      gl,
+      gl.FRAGMENT_SHADER,
+      FRAGMENT_SHADER_SOURCE
+    );
+
+    if (!vertexShader || !fragmentShader) {
+      return null;
+    }
+
+    const program = gl.createProgram();
+
+    gl.attachShader(program, vertexShader);
+    gl.attachShader(program, fragmentShader);
+    gl.linkProgram(program);
+
+    if (!gl.getProgramParameter(program, gl.LINK_STATUS)) {
+      return null;
+    }
+
+    gl.enable(gl.BLEND);
+    gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
+
+    return {
+      alphaLocation: gl.getUniformLocation(program, "u_alpha"),
+      buffer: gl.createBuffer(),
+      context: gl,
+      positionLocation: gl.getAttribLocation(program, "a_position"),
+      program,
+      resolutionLocation: gl.getUniformLocation(program, "u_resolution"),
+      texCoordLocation: gl.getAttribLocation(program, "a_tex_coord"),
+      textureLocation: gl.getUniformLocation(program, "u_texture"),
+    };
+  }
+
+  compileShader(gl, type, source) {
+    const shader = gl.createShader(type);
+
+    gl.shaderSource(shader, source);
+    gl.compileShader(shader);
+
+    return gl.getShaderParameter(shader, gl.COMPILE_STATUS) ? shader : null;
   }
 
   currentMode() {
@@ -809,11 +1032,20 @@ export default class TextJumbleScreenSaver extends Component {
   }
 
   canvasWashColor() {
+    const { alpha, rgb } = this.canvasWashRgb();
+
+    return rgbString(rgb, alpha);
+  }
+
+  canvasWashRgb() {
     const stageRgb = this.stage?.style
       .getPropertyValue("--text-jumble-background-rgb")
       .trim();
 
-    return stageRgb ? `rgba(${stageRgb}, 0.24)` : "rgba(8, 11, 16, 0.24)";
+    return {
+      alpha: 0.24,
+      rgb: parseRgb(stageRgb, [8, 11, 16]),
+    };
   }
 
   applyBackgroundPalette() {
