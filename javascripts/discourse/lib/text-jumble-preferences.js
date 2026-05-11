@@ -7,7 +7,6 @@ export const TEXT_JUMBLE_ANIMATION_MODES = [
   { id: "grid", labelKey: "text_jumble.animation_styles.grid" },
   { id: "spiral", labelKey: "text_jumble.animation_styles.spiral" },
   { id: "sorting", labelKey: "text_jumble.animation_styles.sorting" },
-  { id: "slots", labelKey: "text_jumble.animation_styles.slots" },
   { id: "wave", labelKey: "text_jumble.animation_styles.wave" },
   { id: "orbit", labelKey: "text_jumble.animation_styles.orbit" },
   { id: "columns", labelKey: "text_jumble.animation_styles.columns" },
@@ -16,6 +15,7 @@ export const TEXT_JUMBLE_ANIMATION_MODES = [
     id: "slot_machine",
     labelKey: "text_jumble.animation_styles.slot_machine",
   },
+  { id: "single_out", labelKey: "text_jumble.animation_styles.single_out" },
 ];
 export const TEXT_JUMBLE_ANIMATION_MODE_IDS = TEXT_JUMBLE_ANIMATION_MODES.map(
   (mode) => mode.id

@@ -742,6 +742,8 @@ export default class TextJumbleScreenSaver extends Component {
       globalWordIndex = lineWordIndex;
     });
 
+    this.prepareWordMetadata(glyphs, globalWordIndex);
+
     let dominoIndex = 0;
     const glyphsByLine = new Map();
     glyphs.forEach((glyph) => {
@@ -810,6 +812,48 @@ export default class TextJumbleScreenSaver extends Component {
     }
 
     return wordIndex % SPECTRUM_PALETTE_LEVEL_COUNT;
+  }
+
+  prepareWordMetadata(glyphs, wordCount) {
+    const glyphsByWord = new Map();
+
+    glyphs.forEach((glyph) => {
+      const wordGlyphs = glyphsByWord.get(glyph.wordIndex) || [];
+      wordGlyphs.push(glyph);
+      glyphsByWord.set(glyph.wordIndex, wordGlyphs);
+      glyph.totalWordCount = wordCount;
+    });
+
+    const selectedWordIndex =
+      glyphsByWord.size > 0
+        ? glyphsByWord
+            .entries()
+            .toArray()
+            .toSorted(
+              ([wordIndexA, glyphsA], [wordIndexB, glyphsB]) =>
+                glyphsB.length - glyphsA.length || wordIndexA - wordIndexB
+            )
+            .slice(0, 10)
+            .at(Math.floor(Math.random() * Math.min(glyphsByWord.size, 10)))[0]
+        : -1;
+
+    glyphsByWord.forEach((wordGlyphs, wordIndex) => {
+      const left = Math.min(
+        ...wordGlyphs.map((glyph) => glyph.x - glyph.width / 2)
+      );
+      const right = Math.max(
+        ...wordGlyphs.map((glyph) => glyph.x + glyph.width / 2)
+      );
+      const wordCenterX = (left + right) / 2;
+
+      wordGlyphs.forEach((glyph) => {
+        glyph.isLongestWord = wordIndex === selectedWordIndex;
+        glyph.longestWordIndex = selectedWordIndex;
+        glyph.wordCenterOffset = glyph.x - wordCenterX;
+        glyph.wordHalfWidth = (right - left) / 2;
+        glyph.wordLength = wordGlyphs.length;
+      });
+    });
   }
 
   startAnimation() {
@@ -991,13 +1035,14 @@ export default class TextJumbleScreenSaver extends Component {
         glyphs.length
       );
       const wave =
-        mode === "slot_machine"
+        mode === "slot_machine" || mode === "single_out"
           ? 0
           : Math.sin(now * 0.0017 + glyph.index * 0.37) * 7 * jumbleAmount;
       const x = glyph.x + (target.x - glyph.x) * jumbleAmount + wave;
       const y = glyph.y + (target.y - glyph.y) * jumbleAmount;
       const rotation = (target.rotation || 0) * jumbleAmount;
       const scale = 1 + ((target.scale || 1) - 1) * jumbleAmount;
+      const targetAlpha = 1 + ((target.alpha ?? 1) - 1) * jumbleAmount;
       const palette = palettes[glyph.colorPaletteMode] || palettes.spectrum;
       const colorIndex = glyph.colorIndex % palette.fills.length;
       const fillColor = palette.fills[colorIndex];
@@ -1011,7 +1056,10 @@ export default class TextJumbleScreenSaver extends Component {
           y,
           rotation,
           scale,
-          alpha * smoothstep(0, 1, glyphReveal) * (0.94 + jumbleAmount * 0.06)
+          alpha *
+            targetAlpha *
+            smoothstep(0, 1, glyphReveal) *
+            (0.94 + jumbleAmount * 0.06)
         );
       } else {
         ctx.save();
@@ -1022,7 +1070,10 @@ export default class TextJumbleScreenSaver extends Component {
         ctx.textAlign = "center";
         ctx.textBaseline = "middle";
         ctx.globalAlpha =
-          alpha * smoothstep(0, 1, glyphReveal) * (0.94 + jumbleAmount * 0.06);
+          alpha *
+          targetAlpha *
+          smoothstep(0, 1, glyphReveal) *
+          (0.94 + jumbleAmount * 0.06);
         this.drawGlyphSprite(ctx, glyph, fillColor, palette.stroke);
         ctx.restore();
       }
@@ -1621,16 +1672,80 @@ export default class TextJumbleScreenSaver extends Component {
       };
     }
 
-    const railCount = Math.max(5, Math.min(11, Math.ceil(glyphCount / 85)));
-    const rail = glyph.index % railCount;
-    const slotWidth = width * 0.7;
-    const offset =
-      ((now * 0.032 + glyph.index * 19) % slotWidth) - slotWidth / 2;
+    if (mode === "single_out") {
+      if (glyph.isLongestWord) {
+        return {
+          rotation: 0,
+          scale: 1.12,
+          x: width / 2 + glyph.wordCenterOffset,
+          y: height / 2,
+        };
+      }
+
+      const padding = Math.min(width, height) * 0.08;
+      const constellationWidth = Math.max(width - padding * 2, 1);
+      const constellationHeight = Math.max(height - padding * 2, 1);
+      const backgroundWordCount = Math.max((glyph.totalWordCount || 1) - 1, 1);
+      const constellationColumns = Math.max(
+        3,
+        Math.ceil(
+          Math.sqrt(
+            backgroundWordCount * (constellationWidth / constellationHeight)
+          )
+        )
+      );
+      const constellationRows = Math.max(
+        2,
+        Math.ceil(backgroundWordCount / constellationColumns)
+      );
+      const backgroundWordIndex =
+        glyph.wordIndex > glyph.longestWordIndex
+          ? glyph.wordIndex - 1
+          : glyph.wordIndex;
+      const cellWidth = constellationWidth / constellationColumns;
+      const cellHeight = constellationHeight / constellationRows;
+      const cellColumn = backgroundWordIndex % constellationColumns;
+      const cellRow = Math.floor(backgroundWordIndex / constellationColumns);
+      const jitterX =
+        (seededUnit(glyph.wordIndex + 11) - 0.5) * cellWidth * 0.36;
+      const jitterY =
+        (seededUnit(glyph.wordIndex + 41) - 0.5) * cellHeight * 0.36;
+      const orbit =
+        Math.sin(now * 0.001 + glyph.wordIndex * 0.9) *
+        Math.min(width, height) *
+        0.018;
+      const wordHalfWidth = (glyph.wordHalfWidth || glyph.fontSize) * 0.88;
+      const wordX =
+        ((cellColumn + 0.5) * cellWidth +
+          jitterX +
+          now * (0.018 + seededUnit(glyph.wordIndex + 23) * 0.012)) %
+        constellationWidth;
+      const wordY =
+        ((cellRow + 0.5) * cellHeight +
+          jitterY +
+          now * (0.006 + seededUnit(glyph.wordIndex + 59) * 0.006)) %
+        constellationHeight;
+      const centerMin = padding + wordHalfWidth + Math.abs(orbit);
+      const centerMax = width - padding - wordHalfWidth - Math.abs(orbit);
+      const wordCenterX =
+        centerMin < centerMax
+          ? clamp(padding + wordX, centerMin, centerMax)
+          : width / 2;
+
+      return {
+        alpha: 0.58,
+        rotation: Math.sin(now * 0.0007 + glyph.wordIndex) * 0.08,
+        scale: 0.86,
+        x: wordCenterX + glyph.wordCenterOffset * 0.88 + orbit,
+        y: padding + wordY,
+      };
+    }
 
     return {
-      rotation: rail % 2 ? -0.18 : 0.18,
-      x: width / 2 + offset,
-      y: height * 0.24 + rail * ((height * 0.52) / Math.max(railCount - 1, 1)),
+      rotation: 0,
+      scale: 1,
+      x: glyph.x,
+      y: glyph.y,
     };
   }
 

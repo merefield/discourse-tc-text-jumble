@@ -5,12 +5,12 @@ en:
       grid: "Grid"
       spiral: "Spiral"
       sorting: "Sorting"
-      slots: "Slots"
       wave: "Wave"
       orbit: "Orbit"
       columns: "Columns"
       dominos: "Dominos"
       slot_machine: "Slot machine"
+      single_out: "Single out"
     preferences:
       title: "Text Jumble"
       disable_screen_saver: "Disable the Text Jumble screen saver on this browser"
