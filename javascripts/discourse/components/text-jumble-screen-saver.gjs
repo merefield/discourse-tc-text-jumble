@@ -36,7 +36,8 @@ const MAX_GLYPHS = 1100;
 const TEXT_TRANSITION_MS = 1600;
 const TEXT_TYPE_TRANSITION_MS = 3200;
 const TEXT_TYPE_FADE_OUT_MS = 1000;
-const TEXT_REUSE_TRANSITION_MS = 2200;
+const TEXT_REUSE_TRANSITION_MS = 2800;
+const TEXT_REUSE_FILL_TRANSITION_MS = 2800;
 const HEAP_FORCE_RESTORE_AFTER_LAST_FALL_MS = 6500;
 const HEAP_FORCED_RESTORE_MS = ANIMATION_MS * ANIMATION_RETURN_RATIO;
 const FONT_FAMILY = "Georgia, serif";
@@ -175,6 +176,8 @@ export default class TextJumbleScreenSaver extends Component {
   renderer = "canvas";
   resizeObserver = null;
   root = null;
+  reuseFillProgress = null;
+  reuseMatchedGlyphs = [];
   reuseTransitionProgress = null;
   slotMachineSeed = 0;
   stage = null;
@@ -211,6 +214,22 @@ export default class TextJumbleScreenSaver extends Component {
 
   get hasSelectedAnimationModes() {
     return this.selectedAnimationModes.length > 0;
+  }
+
+  get canUseScreenSaver() {
+    return (
+      !this.isPageMode &&
+      settings.text_jumble_screen_saver_enabled &&
+      settings.text_jumble_idle_seconds > 0 &&
+      !this.isScreenSaverLocallyDisabled &&
+      this.hasSelectedAnimationModes
+    );
+  }
+
+  get canActivateScreenSaver() {
+    return (
+      this.canUseScreenSaver && !document.hidden && !this.isTextJumbleRoute
+    );
   }
 
   get animationStyleOptions() {
@@ -358,11 +377,7 @@ export default class TextJumbleScreenSaver extends Component {
   }
 
   startScreenSaverListeners() {
-    if (
-      this.screenSaverListenersStarted ||
-      this.isScreenSaverLocallyDisabled ||
-      !this.hasSelectedAnimationModes
-    ) {
+    if (this.screenSaverListenersStarted || !this.canUseScreenSaver) {
       return;
     }
 
@@ -402,13 +417,13 @@ export default class TextJumbleScreenSaver extends Component {
   }
 
   async show() {
-    if (!this.isPageMode && !this.hasSelectedAnimationModes) {
+    if (!this.isPageMode && !this.canActivateScreenSaver) {
       return;
     }
 
     this.glyphs = [];
     this.outgoingGlyphs = [];
-    this.transitionMode = Math.random() < 0.5 ? "crossfade" : "type";
+    this.transitionMode = Math.random() < 0.5 ? "reuse" : "reuse_fill";
     this.transitionStartedAt = null;
     this.isVisible = true;
     await this.loadParagraph();
@@ -528,13 +543,7 @@ export default class TextJumbleScreenSaver extends Component {
   scheduleIdle() {
     clearTimeout(this.idleTimer);
 
-    if (
-      document.hidden ||
-      !settings.text_jumble_screen_saver_enabled ||
-      this.isScreenSaverLocallyDisabled ||
-      !this.hasSelectedAnimationModes ||
-      this.isTextJumbleRoute
-    ) {
+    if (!this.canActivateScreenSaver) {
       return;
     }
 
@@ -787,11 +796,12 @@ export default class TextJumbleScreenSaver extends Component {
 
     if (transition) {
       if (this.glyphs.length) {
-        const transitionModes = ["crossfade", "type", "reuse"];
+        const transitionModes = ["reuse", "reuse_fill"];
         this.transitionMode =
           transitionModes[Math.floor(Math.random() * transitionModes.length)];
         this.outgoingGlyphs =
-          this.transitionMode === "reuse"
+          this.transitionMode === "reuse" ||
+          this.transitionMode === "reuse_fill"
             ? this.prepareReuseTransition(this.glyphs, glyphs, width, height)
             : this.glyphs;
         this.transitionStartedAt = performance.now();
@@ -804,6 +814,7 @@ export default class TextJumbleScreenSaver extends Component {
       }
     } else {
       this.outgoingGlyphs = [];
+      this.reuseMatchedGlyphs = [];
       this.transitionMode = "crossfade";
       this.transitionStartedAt = null;
     }
@@ -1000,6 +1011,7 @@ export default class TextJumbleScreenSaver extends Component {
     });
 
     const reusedOldGlyphs = new Set();
+    const matchedGlyphs = [];
 
     newGlyphs.forEach((glyph) => {
       const key = this.transitionGlyphKey(glyph);
@@ -1008,18 +1020,27 @@ export default class TextJumbleScreenSaver extends Component {
 
       if (oldGlyph) {
         reusedOldGlyphs.add(oldGlyph);
+        matchedGlyphs.push({
+          ...oldGlyph,
+          transitionToX: glyph.x,
+          transitionToY: glyph.y,
+        });
+        glyph.transitionIsNew = false;
         glyph.transitionFromX = oldGlyph.x;
         glyph.transitionFromY = oldGlyph.y;
         glyph.transitionFromRotation = 0;
       } else {
         const start = this.edgeStartForGlyph(glyph, width, height);
 
+        glyph.transitionIsNew = true;
         glyph.transitionFromX = start.x;
         glyph.transitionFromY = start.y;
         glyph.transitionFromRotation =
           (seededUnit(glyph.index + 151) - 0.5) * Math.PI;
       }
     });
+
+    this.reuseMatchedGlyphs = matchedGlyphs;
 
     return oldGlyphs.filter((glyph) => !reusedOldGlyphs.has(glyph));
   }
@@ -1804,9 +1825,11 @@ export default class TextJumbleScreenSaver extends Component {
       const transitionDuration =
         this.transitionMode === "type"
           ? TEXT_TYPE_TRANSITION_MS
-          : this.transitionMode === "reuse"
-            ? TEXT_REUSE_TRANSITION_MS
-            : TEXT_TRANSITION_MS;
+          : this.transitionMode === "reuse_fill"
+            ? TEXT_REUSE_FILL_TRANSITION_MS
+            : this.transitionMode === "reuse"
+              ? TEXT_REUSE_TRANSITION_MS
+              : TEXT_TRANSITION_MS;
       const transitionProgress = clamp(
         (now - this.transitionStartedAt) / transitionDuration,
         0,
@@ -1839,8 +1862,25 @@ export default class TextJumbleScreenSaver extends Component {
         );
         incomingAlpha = smoothstep(0, 0.18, typingProgress);
         incomingRevealProgress = smoothstep(0, 1, typingProgress);
-      } else if (this.transitionMode === "reuse") {
-        const easedProgress = smoothstep(0, 1, transitionProgress);
+      } else if (
+        this.transitionMode === "reuse" ||
+        this.transitionMode === "reuse_fill"
+      ) {
+        const fadeProgress = smoothstep(
+          0,
+          1,
+          clamp(transitionProgress / 0.24, 0, 1)
+        );
+        const moveProgress = smoothstep(
+          0,
+          1,
+          clamp((transitionProgress - 0.28) / 0.36, 0, 1)
+        );
+        const fillProgress = smoothstep(
+          0,
+          1,
+          clamp((transitionProgress - 0.76) / 0.24, 0, 1)
+        );
 
         if (this.outgoingGlyphs.length) {
           this.drawGlyphs(
@@ -1852,13 +1892,32 @@ export default class TextJumbleScreenSaver extends Component {
             width,
             height,
             jumbleAmount,
-            1 - easedProgress
+            1 - fadeProgress
+          );
+        }
+
+        if (this.reuseMatchedGlyphs.length) {
+          this.drawGlyphs(
+            ctx,
+            this.reuseMatchedGlyphs,
+            palettes,
+            mode,
+            now,
+            width,
+            height,
+            jumbleAmount,
+            1,
+            1,
+            moveProgress,
+            null,
+            "matched-old"
           );
         }
 
         incomingAlpha = 1;
         incomingRevealProgress = 1;
-        this.reuseTransitionProgress = easedProgress;
+        this.reuseTransitionProgress = moveProgress;
+        this.reuseFillProgress = fillProgress;
       } else {
         const easedProgress = smoothstep(0, 1, transitionProgress);
 
@@ -1878,8 +1937,10 @@ export default class TextJumbleScreenSaver extends Component {
 
       if (transitionProgress >= 1) {
         this.outgoingGlyphs = [];
+        this.reuseMatchedGlyphs = [];
         this.transitionStartedAt = null;
         this.reuseTransitionProgress = null;
+        this.reuseFillProgress = null;
         incomingAlpha = 1;
         incomingRevealProgress = 1;
       }
@@ -1896,9 +1957,12 @@ export default class TextJumbleScreenSaver extends Component {
       jumbleAmount,
       incomingAlpha,
       incomingRevealProgress,
-      this.reuseTransitionProgress
+      this.reuseTransitionProgress,
+      this.reuseFillProgress,
+      this.transitionStartedAt ? this.transitionMode : null
     );
     this.reuseTransitionProgress = null;
+    this.reuseFillProgress = null;
   }
 
   clearRenderer(ctx, width, height) {
@@ -1938,7 +2002,9 @@ export default class TextJumbleScreenSaver extends Component {
     jumbleAmount,
     alpha,
     revealProgress = 1,
-    reuseTransitionProgress = null
+    reuseTransitionProgress = null,
+    reuseFillProgress = null,
+    transitionRole = null
   ) {
     if (alpha <= 0) {
       return;
@@ -1952,6 +2018,20 @@ export default class TextJumbleScreenSaver extends Component {
       );
 
       if (glyphReveal <= 0) {
+        continue;
+      }
+
+      let glyphTransitionAlpha = 1;
+
+      if (transitionRole === "reuse" || transitionRole === "reuse_fill") {
+        glyphTransitionAlpha = glyph.transitionIsNew
+          ? reuseFillProgress || 0
+          : 0;
+      } else if (reuseFillProgress !== null && glyph.transitionIsNew) {
+        glyphTransitionAlpha = reuseFillProgress;
+      }
+
+      if (glyphTransitionAlpha <= 0) {
         continue;
       }
 
@@ -1975,20 +2055,33 @@ export default class TextJumbleScreenSaver extends Component {
         reuseTransitionProgress === null
           ? null
           : smoothstep(0, 1, reuseTransitionProgress);
+      const shouldFlyNewGlyph =
+        transitionRole === "reuse" && glyph.transitionIsNew;
+      const effectiveReuseProgress = shouldFlyNewGlyph
+        ? glyphTransitionAlpha
+        : reuseProgress;
       const baseX =
-        reuseProgress === null || glyph.transitionFromX === undefined
-          ? glyph.x
-          : glyph.transitionFromX +
-            (glyph.x - glyph.transitionFromX) * reuseProgress;
+        transitionRole === "matched-old" && reuseProgress !== null
+          ? glyph.x +
+            ((glyph.transitionToX ?? glyph.x) - glyph.x) * reuseProgress
+          : effectiveReuseProgress === null ||
+              glyph.transitionFromX === undefined
+            ? glyph.x
+            : glyph.transitionFromX +
+              (glyph.x - glyph.transitionFromX) * effectiveReuseProgress;
       const baseY =
-        reuseProgress === null || glyph.transitionFromY === undefined
-          ? glyph.y
-          : glyph.transitionFromY +
-            (glyph.y - glyph.transitionFromY) * reuseProgress;
+        transitionRole === "matched-old" && reuseProgress !== null
+          ? glyph.y +
+            ((glyph.transitionToY ?? glyph.y) - glyph.y) * reuseProgress
+          : effectiveReuseProgress === null ||
+              glyph.transitionFromY === undefined
+            ? glyph.y
+            : glyph.transitionFromY +
+              (glyph.y - glyph.transitionFromY) * effectiveReuseProgress;
       const baseRotation =
-        reuseProgress === null
+        effectiveReuseProgress === null
           ? 0
-          : (glyph.transitionFromRotation || 0) * (1 - reuseProgress);
+          : (glyph.transitionFromRotation || 0) * (1 - effectiveReuseProgress);
       const x = baseX + (target.x - glyph.x) * jumbleAmount + wave;
       const y = baseY + (target.y - glyph.y) * jumbleAmount;
       const rotation = baseRotation + (target.rotation || 0) * jumbleAmount;
@@ -2008,6 +2101,7 @@ export default class TextJumbleScreenSaver extends Component {
           rotation,
           scale,
           alpha *
+            glyphTransitionAlpha *
             targetAlpha *
             smoothstep(0, 1, glyphReveal) *
             (0.94 + jumbleAmount * 0.06)
@@ -2022,6 +2116,7 @@ export default class TextJumbleScreenSaver extends Component {
         ctx.textBaseline = "middle";
         ctx.globalAlpha =
           alpha *
+          glyphTransitionAlpha *
           targetAlpha *
           smoothstep(0, 1, glyphReveal) *
           (0.94 + jumbleAmount * 0.06);
