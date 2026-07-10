@@ -9,6 +9,7 @@ export const TEXT_JUMBLE_ANIMATION_MODES = [
   { id: "sorting", labelKey: "text_jumble.animation_styles.sorting" },
   { id: "wave", labelKey: "text_jumble.animation_styles.wave" },
   { id: "orbit", labelKey: "text_jumble.animation_styles.orbit" },
+  { id: "globes", labelKey: "text_jumble.animation_styles.globes" },
   { id: "columns", labelKey: "text_jumble.animation_styles.columns" },
   { id: "dominos", labelKey: "text_jumble.animation_styles.dominos" },
   {

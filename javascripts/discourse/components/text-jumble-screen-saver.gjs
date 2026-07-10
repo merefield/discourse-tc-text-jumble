@@ -41,6 +41,33 @@ const TEXT_REUSE_FILL_TRANSITION_MS = 2800;
 const HEAP_FORCE_RESTORE_AFTER_LAST_FALL_MS = 6500;
 const HEAP_FORCED_RESTORE_MS = ANIMATION_MS * ANIMATION_RETURN_RATIO;
 const FONT_FAMILY = "Georgia, serif";
+const GOLDEN_ANGLE = Math.PI * (3 - Math.sqrt(5));
+const GLOBE_SPECS = [
+  {
+    centerOffsetX: -0.29,
+    centerOffsetY: 0.08,
+    phase: 0.2,
+    radius: 0.245,
+    rotationSpeed: 0.00017,
+    tilt: 0.32,
+  },
+  {
+    centerOffsetX: 0.19,
+    centerOffsetY: -0.17,
+    phase: 2.3,
+    radius: 0.18,
+    rotationSpeed: -0.00023,
+    tilt: -0.46,
+  },
+  {
+    centerOffsetX: 0.37,
+    centerOffsetY: 0.21,
+    phase: 4.7,
+    radius: 0.115,
+    rotationSpeed: 0.0003,
+    tilt: 0.58,
+  },
+];
 const VERTEX_SHADER_SOURCE = `
   attribute vec2 a_position;
   attribute vec2 a_tex_coord;
@@ -793,6 +820,7 @@ export default class TextJumbleScreenSaver extends Component {
     });
     sorted.forEach((glyph, rank) => (glyph.sortedRank = rank));
     this.preparePileMetadata(glyphs, width, height, fontSize);
+    this.prepareGlobeMetadata(glyphs);
 
     if (transition) {
       if (this.glyphs.length) {
@@ -958,6 +986,41 @@ export default class TextJumbleScreenSaver extends Component {
           height - fontSize
         );
         glyph.pileRotation = (seededUnit(seed + rank * 19) - 0.5) * 0.46;
+      });
+    });
+  }
+
+  prepareGlobeMetadata(glyphs) {
+    const minimumPerGlobe = glyphs.length >= 3 ? 1 : 0;
+    const remainingGlyphCount = glyphs.length - minimumPerGlobe * 3;
+    const largeGlobeCount =
+      minimumPerGlobe + Math.round(remainingGlyphCount * 0.56);
+    const mediumGlobeCount =
+      minimumPerGlobe + Math.round(remainingGlyphCount * 0.3);
+    const globeCounts = [
+      largeGlobeCount,
+      mediumGlobeCount,
+      glyphs.length - largeGlobeCount - mediumGlobeCount,
+    ];
+    let offset = 0;
+
+    globeCounts.forEach((globeGlyphCount, globeIndex) => {
+      const globeGlyphs = glyphs.slice(offset, offset + globeGlyphCount);
+
+      offset += globeGlyphCount;
+
+      globeGlyphs.forEach((glyph, globeGlyphIndex) => {
+        const y =
+          1 - (2 * (globeGlyphIndex + 0.5)) / Math.max(globeGlyphCount, 1);
+        const horizontalRadius = Math.sqrt(Math.max(0, 1 - y * y));
+        const longitude =
+          globeGlyphIndex * GOLDEN_ANGLE + globeIndex * Math.PI * 0.72;
+
+        glyph.globeGlyphCount = globeGlyphCount;
+        glyph.globeIndex = globeIndex;
+        glyph.globeX = Math.cos(longitude) * horizontalRadius;
+        glyph.globeY = y;
+        glyph.globeZ = Math.sin(longitude) * horizontalRadius;
       });
     });
   }
@@ -2010,7 +2073,30 @@ export default class TextJumbleScreenSaver extends Component {
       return;
     }
 
-    for (const glyph of glyphs) {
+    const globesAreVisible = mode === "globes" && jumbleAmount > 0.01;
+    const globeTransforms = globesAreVisible
+      ? this.globeTransforms(now, width, height, glyphs[0]?.fontSize || 0)
+      : null;
+    const globeTargets = globeTransforms
+      ? glyphs
+          .map((glyph) => ({
+            glyph,
+            target: this.targetForGlyph(
+              glyph,
+              mode,
+              now,
+              width,
+              height,
+              glyphs.length,
+              globeTransforms
+            ),
+          }))
+          .toSorted((a, b) => (a.target.depth ?? 0) - (b.target.depth ?? 0))
+      : null;
+    const glyphsToDraw = globeTargets || glyphs;
+
+    for (const glyphOrTarget of glyphsToDraw) {
+      const glyph = globeTargets ? glyphOrTarget.glyph : glyphOrTarget;
       const glyphReveal = clamp(
         revealProgress * glyphs.length - glyph.index,
         0,
@@ -2035,20 +2121,18 @@ export default class TextJumbleScreenSaver extends Component {
         continue;
       }
 
-      const target = this.targetForGlyph(
-        glyph,
-        mode,
-        now,
-        width,
-        height,
-        glyphs.length
-      );
+      const target = globeTargets
+        ? glyphOrTarget.target
+        : mode === "globes"
+          ? glyph
+          : this.targetForGlyph(glyph, mode, now, width, height, glyphs.length);
       const wave =
         mode === "slot_machine" ||
         mode === "single_out" ||
         mode === "heap" ||
         mode === "smash" ||
-        mode === "pile"
+        mode === "pile" ||
+        mode === "globes"
           ? 0
           : Math.sin(now * 0.0017 + glyph.index * 0.37) * 7 * jumbleAmount;
       const reuseProgress =
@@ -2603,13 +2687,45 @@ export default class TextJumbleScreenSaver extends Component {
     return offset;
   }
 
+  globeTransforms(now, width, height, fontSize) {
+    const canvasSize = Math.min(width, height);
+
+    return GLOBE_SPECS.map((globe) => {
+      const radius = canvasSize * globe.radius;
+      const horizontalInset = Math.min(radius + fontSize * 0.55, width / 2);
+      const verticalInset = Math.min(radius + fontSize * 0.55, height / 2);
+      const rotation =
+        (now - this.startedAt) * globe.rotationSpeed + globe.phase;
+
+      return {
+        ...globe,
+        centerX: clamp(
+          width / 2 + canvasSize * globe.centerOffsetX,
+          horizontalInset,
+          width - horizontalInset
+        ),
+        centerY: clamp(
+          height / 2 + canvasSize * globe.centerOffsetY,
+          verticalInset,
+          height - verticalInset
+        ),
+        cosRotation: Math.cos(rotation),
+        cosTilt: Math.cos(globe.tilt),
+        radius,
+        sinRotation: Math.sin(rotation),
+        sinTilt: Math.sin(globe.tilt),
+      };
+    });
+  }
+
   targetForGlyph(
     glyph,
     mode,
     now,
     width,
     height,
-    glyphCount = this.glyphs.length
+    glyphCount = this.glyphs.length,
+    globeTransforms = null
   ) {
     if (mode === "grid") {
       const columns = Math.max(Math.floor(Math.sqrt(glyphCount) * 1.45), 1);
@@ -2691,6 +2807,38 @@ export default class TextJumbleScreenSaver extends Component {
         scale: 0.9 + ring * 0.04,
         x: width / 2 + Math.cos(angle) * radius,
         y: height / 2 + Math.sin(angle) * radius,
+      };
+    }
+
+    if (mode === "globes") {
+      const globeIndex = glyph.globeIndex ?? 0;
+      const globe =
+        globeTransforms?.[globeIndex] ||
+        this.globeTransforms(now, width, height, glyph.fontSize)[globeIndex];
+      const sphereX = glyph.globeX ?? 0;
+      const sphereY = glyph.globeY ?? 0;
+      const sphereZ = glyph.globeZ ?? 0;
+      const tiltedY = sphereY * globe.cosTilt - sphereZ * globe.sinTilt;
+      const tiltedZ = sphereY * globe.sinTilt + sphereZ * globe.cosTilt;
+      const x = sphereX * globe.cosRotation + tiltedZ * globe.sinRotation;
+      const z = tiltedZ * globe.cosRotation - sphereX * globe.sinRotation;
+      const depth = clamp((z + 1) / 2, 0, 1);
+      const perspective = 0.82 + depth * 0.24;
+      const densityScale = clamp(
+        (globe.radius * 2.45) /
+          (glyph.fontSize *
+            Math.sqrt(Math.max(glyph.globeGlyphCount || glyphCount, 1))),
+        0.42,
+        1.08
+      );
+
+      return {
+        alpha: 0.2 + depth * 0.8,
+        depth,
+        rotation: x * 0.22 + tiltedY * 0.08,
+        scale: densityScale * (0.58 + depth * 0.52),
+        x: globe.centerX + x * globe.radius * perspective,
+        y: globe.centerY + tiltedY * globe.radius * perspective,
       };
     }
 
